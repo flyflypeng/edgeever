@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { ChevronDown, ChevronRight, Component, FileText, GitFork, Home, PieChart, Plus, Search, Table2, UserRound, Workflow, X } from "lucide-react";
+import { ChevronDown, ChevronRight, Component, FileText, GitFork, Home, NotebookPen, PieChart, Plus, Search, Table2, UserRound, Workflow, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
@@ -62,6 +62,7 @@ export const MobileBottomNav = ({
   isCreating,
   onCreateMemo,
   onHome,
+  onOpenJot,
   onOpenSettings,
 }: {
   activeItem: MobileBottomNavItem;
@@ -69,6 +70,7 @@ export const MobileBottomNav = ({
   isCreating: boolean;
   onCreateMemo: (kind?: NoteCreateKind) => void;
   onHome: () => void;
+  onOpenJot: () => void;
   onOpenSettings: () => void;
 }) => {
   const { t } = useTranslation();
@@ -80,8 +82,9 @@ export const MobileBottomNav = ({
       className="fixed inset-x-0 bottom-0 z-40 border-t border-slate-200 bg-card/95 px-5 pb-[max(0.125rem,env(safe-area-inset-bottom))] pt-0 shadow-[0_-10px_30px_rgba(15,23,42,0.08)] backdrop-blur lg:hidden"
       aria-label={t("nav.mobileMain")}
     >
-      <div className="relative grid h-mobile-bottom-nav grid-cols-3 items-center">
+      <div className="relative grid h-mobile-bottom-nav grid-cols-4 items-center">
         <MobileBottomNavButton active={activeItem === "home"} icon={<Home className="h-5 w-5" />} label={t("nav.home")} onClick={onHome} />
+        <MobileBottomNavButton active={activeItem === "jot"} icon={<NotebookPen className="h-5 w-5" />} label={t("jot.open")} onClick={onOpenJot} />
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <button

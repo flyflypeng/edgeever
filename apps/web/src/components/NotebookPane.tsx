@@ -31,6 +31,8 @@ import {
   RotateCcw,
   FileText,
   Workflow,
+  NotebookPen,
+  History,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -490,6 +492,10 @@ export const NotebookPane = ({
   onMoveNotebook,
   onMoveMemos,
   onBackToList,
+  onOpenJot,
+  jotActive,
+  onOpenJotReview,
+  jotReviewActive,
   onOpenTags,
   onOpenAssets,
   onOpenTemplates,
@@ -524,6 +530,10 @@ export const NotebookPane = ({
   onMoveNotebook: (notebookId: string, targetNotebookId: string, position: NotebookDropPosition) => void;
   onMoveMemos: (memoIds: string[], targetNotebookId: string) => void;
   onBackToList: () => void;
+  onOpenJot: () => void;
+  jotActive: boolean;
+  onOpenJotReview: () => void;
+  jotReviewActive: boolean;
   onOpenTags: () => void;
   onOpenAssets: () => void;
   onOpenTemplates: () => void;
@@ -699,7 +709,9 @@ export const NotebookPane = ({
       </header>
 
       <TooltipProvider delayDuration={0} skipDelayDuration={0}>
-        <nav className="grid shrink-0 grid-cols-2 gap-0.5 border-b border-slate-100 px-2 py-1.5 sm:grid-cols-3 lg:grid-cols-5" aria-label={t("notebookPane.secondaryEntries")}>
+        <nav className="grid shrink-0 grid-cols-2 gap-0.5 border-b border-slate-100 px-2 py-1.5 sm:grid-cols-4 lg:grid-cols-7" aria-label={t("notebookPane.secondaryEntries")}>
+          <SidebarShortcutButton active={jotActive} icon={<NotebookPen className="h-4 w-4" />} label={t("jot.open")} onClick={onOpenJot} />
+          <SidebarShortcutButton active={jotReviewActive} icon={<History className="h-4 w-4" />} label={t("jot.review.title")} onClick={onOpenJotReview} />
           <SidebarShortcutButton icon={<Tag className="h-4 w-4" />} label={t("mobileSheets.tags")} onClick={onOpenTags} />
           <SidebarShortcutButton icon={<Paperclip className="h-4 w-4" />} label={t("mobileSheets.assets")} onClick={onOpenAssets} />
           {showTemplateEntry && <SidebarShortcutButton icon={<LayoutTemplate className="h-4 w-4" />} label={t("nav.templates")} onClick={onOpenTemplates} />}
@@ -919,13 +931,25 @@ export const NotebookPane = ({
 
             <nav className="mt-3 flex min-h-0 flex-1 flex-col items-center gap-1" aria-label={t("notebookPane.entries")}>
               <SidebarRailButton
-                active={view === "notebook" && selectedNotebookId === null}
+                active={jotActive}
+                icon={<NotebookPen className="h-4 w-4" />}
+                label={t("jot.open")}
+                onClick={onOpenJot}
+              />
+              <SidebarRailButton
+                active={jotReviewActive}
+                icon={<History className="h-4 w-4" />}
+                label={t("jot.review.title")}
+                onClick={onOpenJotReview}
+              />
+              <SidebarRailButton
+                active={!jotActive && !jotReviewActive && view === "notebook" && selectedNotebookId === null}
                 icon={<LayoutList className="h-4 w-4" />}
                 label={t("notebookPane.allMemos")}
                 onClick={onBackToList}
               />
               <SidebarRailButton
-                active={view === "notebook" && selectedNotebookId !== null}
+                active={!jotActive && !jotReviewActive && view === "notebook" && selectedNotebookId !== null}
                 icon={<NotebookIcon className="h-4 w-4" />}
                 label={t("notebookPane.notebooks")}
                 onClick={onToggleCollapsed}

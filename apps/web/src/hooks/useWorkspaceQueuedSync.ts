@@ -96,6 +96,7 @@ export const useWorkspaceQueuedSync = ({
 
   const invalidateSyncQueries = useCallback(() => Promise.all([
     queryClient.invalidateQueries({ queryKey: ["memos"] }),
+    queryClient.invalidateQueries({ queryKey: ["jot"] }),
     queryClient.invalidateQueries({ queryKey: ["memo"] }),
     queryClient.invalidateQueries({ queryKey: ["notebooks"] }),
     queryClient.invalidateQueries({ queryKey: ["templates"] }),

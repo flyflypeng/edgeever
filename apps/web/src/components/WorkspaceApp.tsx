@@ -159,6 +159,7 @@ const EvernoteImportGuidePane = lazy(() =>
 const TagsPane = lazy(() => import("./TagsPane").then((module) => ({ default: module.TagsPane })));
 const TemplatesPane = lazy(() => import("./TemplatesPane").then((module) => ({ default: module.TemplatesPane })));
 const AiPromptsPane = lazy(() => import("./AiPromptsPane").then((module) => ({ default: module.AiPromptsPane })));
+const JotView = lazy(() => import("./jot/JotView"));
 const ExecutionCenterPane = lazy(() =>
   import("./execution/ExecutionCenterPane").then((module) => ({ default: module.ExecutionCenterPane }))
 );
@@ -514,7 +515,7 @@ export const WorkspaceApp = ({
     shortcutSettings,
   } = useWorkspacePreferences();
   const { noteProse, updateNoteProse } = useNoteProse();
-  const [rightView, setRightView] = useState<"editor" | "settings" | "plugins" | "assets" | "tags" | "templates" | "ai-prompts" | "execution-center" | "evernote-migration">(() =>
+  const [rightView, setRightView] = useState<"editor" | "jot" | "jot-review" | "settings" | "plugins" | "assets" | "tags" | "templates" | "ai-prompts" | "execution-center" | "evernote-migration">(() =>
     isInitialSettingsRoute
       ? "settings"
       : isInitialPluginsRoute
@@ -697,10 +698,11 @@ export const WorkspaceApp = ({
 
   const mobileEditorReturnMemoId = route.mobileEditorReturnMemoId;
   const visibleActivePane: Pane = mobileEditorReturnMemoId ? "memos" : activePane;
-  const defaultMemoNotebookId =
+  const inboxNotebook =
     notebooks.find(
       (notebook) => notebook.id === "nb_inbox" || notebook.slug === "inbox" || notebook.name === "等待分类"
-    )?.id ?? null;
+    ) ?? null;
+  const defaultMemoNotebookId = inboxNotebook?.id ?? null;
   const createMemoNotebookId = getCreateMemoNotebookId(selectedNotebookId, notebooks, defaultMemoNotebookId);
   const canCreateMemo = Boolean(createMemoNotebookId && memoView !== "trash");
   const memoSelectionModeActive = memoSelectionMode || selectedMemoIds.size > 0;
@@ -1508,7 +1510,11 @@ export const WorkspaceApp = ({
   const selectedTableNote = hasTableDocumentMarker(selectedMemo?.contentMarkdown);
   const selectedPosterNote = hasPosterDocumentMarker(selectedMemo?.contentMarkdown);
   const selectedInfographicNote = Boolean(parseInfographicDocument(selectedMemo?.contentMarkdown));
-  const desktopNotebookSidebarCollapsed = Boolean(isDesktop && notebookSidebarCollapsed);
+  const jotActive = rightView === "jot";
+  const jotReviewActive = rightView === "jot-review";
+  // Jot and Review show the notebook sidebar as a rail without touching the persisted
+  // collapse preference, so leaving them restores the user's own layout.
+  const desktopNotebookSidebarCollapsed = Boolean(isDesktop && (notebookSidebarCollapsed || jotActive || jotReviewActive));
   const desktopFocusModeActive = Boolean(
     isDesktop && desktopFocusMode && rightView === "editor" && selectedMemo && !memoSelectionModeActive
   );
@@ -2398,6 +2404,9 @@ export const WorkspaceApp = ({
   const handleMobileHome = () => {
     clearPendingMemoSelection();
     navigateWorkspaceHome();
+    if (rightView === "jot" || rightView === "jot-review") {
+      setRightView("editor");
+    }
     if (memoView === "trash") {
       setMemoView("notebook");
     }
@@ -2555,6 +2564,21 @@ export const WorkspaceApp = ({
     setActivePane("editor");
   };
 
+  const openJotView = (view: "jot" | "jot-review") => {
+    clearHiddenMobileSearch();
+    clearMemoSelection();
+    // Jot is an inbox view; leaving trash keeps the memo list consistent with
+    // the home route once Jot closes.
+    if (memoView === "trash") {
+      setMemoView("notebook");
+    }
+    skipNextHomeRouteSyncRef.current = route.pathname !== "/" || isTrashRoute;
+    navigateWorkspaceHome();
+    setRightView(view);
+    setMobileBottomNavActive(view === "jot" ? "jot" : "home");
+    setActivePane("editor");
+  };
+
   const handleOpenTemplates = () => {
     clearHiddenMobileSearch();
     navigateWorkspaceTemplates();
@@ -2608,6 +2632,27 @@ export const WorkspaceApp = ({
     navigateWorkspaceHome();
     setRightView("editor");
     setMobileBottomNavActive("home");
+  };
+
+  // Leaving Jot restores the three-pane workspace. Jot never writes the
+  // persisted sidebar collapse preference, so an expanded sidebar returns.
+  const handleCloseJot = () => {
+    navigateWorkspaceHome();
+    setRightView("editor");
+    setMobileBottomNavActive("home");
+    if (!isDesktopViewport()) {
+      setActivePane("memos");
+    }
+  };
+
+  // In Jot the rail's notebooks/collapse controls leave Jot instead of
+  // toggling the stored preference.
+  const handleToggleNotebookSidebar = () => {
+    if (jotActive || jotReviewActive) {
+      handleCloseJot();
+      return;
+    }
+    setNotebookSidebarCollapsed(!notebookSidebarCollapsed);
   };
 
   const handleCloseTemplates = () => {
@@ -2784,6 +2829,11 @@ export const WorkspaceApp = ({
       return true;
     }
 
+    if (rightView === "jot" || rightView === "jot-review") {
+      handleCloseJot();
+      return true;
+    }
+
     if (rightView === "tags") {
       handleCloseAssets();
       return true;
@@ -2820,6 +2870,7 @@ export const WorkspaceApp = ({
     emptyTrashConfirmationOpen,
     emptyTrashMutation.isPending,
     handleCloseAssets,
+    handleCloseJot,
     handleCloseSettings,
     handleCloseExecutionCenter,
     handleCloseTemplates,
@@ -3193,6 +3244,8 @@ export const WorkspaceApp = ({
           ? t("aiPrompts.title")
         : rightView === "execution-center"
           ? t("executionHistory.centerTitle")
+        : rightView === "jot" || rightView === "jot-review"
+          ? t("jot.loading")
         : rightView === "evernote-migration"
           ? t("workspace.loading.migration")
           : t("workspace.loading.editor");
@@ -3210,6 +3263,9 @@ export const WorkspaceApp = ({
         ? t("workspace.pullToRefresh.pullNotes")
         : t("workspace.pullToRefresh.pullPage");
   const showMobileSettingsNav = visibleActivePane === "editor" && rightView === "settings";
+  // Jot is a top-level mobile destination, so the bottom navigation stays visible.
+  const showMobileJotNav = visibleActivePane === "editor" && (rightView === "jot" || rightView === "jot-review");
+  const showMobileRightPaneNav = showMobileSettingsNav || showMobileJotNav;
 
   return (
     <WorkspaceMotionProvider>
@@ -3278,6 +3334,10 @@ export const WorkspaceApp = ({
                   onMoveNotebook={handleMoveNotebook}
                   onMoveMemos={handleMoveDraggedMemos}
                   onBackToList={handleSelectAllMemos}
+                  onOpenJot={() => openJotView("jot")}
+                  jotActive={jotActive}
+                  onOpenJotReview={() => openJotView("jot-review")}
+                  jotReviewActive={jotReviewActive}
                   onLogout={onLogout}
                   isLoggingOut={isLoggingOut}
                   imageCompressionEnabled={imageCompressionEnabled}
@@ -3309,7 +3369,7 @@ export const WorkspaceApp = ({
                   onResetDemo={() => setDemoResetConfirmationOpen(true)}
                   isResettingDemo={resetDemoMutation.isPending}
                   collapsed={desktopNotebookSidebarCollapsed}
-                  onToggleCollapsed={() => setNotebookSidebarCollapsed(!notebookSidebarCollapsed)}
+                  onToggleCollapsed={handleToggleNotebookSidebar}
                   collapseShortcutLabel={formatShortcutBinding(shortcutSettings.toggleSidebar)}
                 />
               </Suspense>
@@ -3508,7 +3568,7 @@ export const WorkspaceApp = ({
             />
           </section>
 
-          <section className={cn("edgeever-workspace-editor min-h-0 min-w-0 lg:block", visibleActivePane === "editor" ? "block" : "hidden", showMobileSettingsNav && "pb-[calc(4rem+env(safe-area-inset-bottom))] lg:pb-0")}>
+          <section className={cn("edgeever-workspace-editor min-h-0 min-w-0 lg:block", visibleActivePane === "editor" ? "block" : "hidden", showMobileRightPaneNav && "pb-[calc(4rem+env(safe-area-inset-bottom))] lg:pb-0")}>
             {shouldRenderRightPane && (
               <Suspense fallback={<PaneLoadingFallback label={rightPaneLoadingLabel} />}>
                 <m.div key={rightView} className="h-full min-h-0 min-w-0" {...paneEnterMotion}>
@@ -3535,6 +3595,16 @@ export const WorkspaceApp = ({
                       await refreshWorkspaceFromServer("manual");
                     }}
                   />
+                  ) : rightView === "jot" || rightView === "jot-review" ? (
+                    <JotView
+                      view={rightView === "jot-review" ? "review" : "stream"}
+                      repository={repository}
+                      inboxNotebook={inboxNotebook}
+                      notebooks={notebooks}
+                      isDesktop={isDesktop}
+                      imageCompressionEnabled={imageCompressionEnabled}
+                      onOpenMemo={(memoId) => void handleOpenLinkedMemo(memoId)}
+                    />
                   ) : rightView === "plugins" ? (
                     <PluginMarketplacePane host={pluginHost} onClose={handleClosePluginMarketplace} onOpenExecutionCenter={handleOpenExecutionCenter} />
                   ) : rightView === "assets" ? (
@@ -3950,13 +4020,14 @@ export const WorkspaceApp = ({
         options={requestedPluginPanel?.options}
         onClose={() => setRequestedPluginPanel(null)}
       />
-      {(visibleActivePane !== "editor" || showMobileSettingsNav) && !memoSelectionModeActive && (
+      {(visibleActivePane !== "editor" || showMobileRightPaneNav) && !memoSelectionModeActive && (
         <MobileBottomNav
           activeItem={mobileBottomNavActive}
           canCreateMemo={canCreateMemo && memoView !== "trash"}
           isCreating={createMemoMutation.isPending}
           onCreateMemo={handleCreateMemo}
           onHome={handleMobileHome}
+          onOpenJot={() => openJotView("jot")}
           onOpenSettings={handleOpenSettings}
         />
       )}

@@ -66,6 +66,8 @@ export interface MarkdownSourceEditorProps {
   onReady?: () => void;
   searchQuery?: string;
   searchIndex?: number;
+  /** Extra CodeMirror extensions appended after the defaults; keep the array identity stable. */
+  extensions?: Extension[];
 }
 
 export const CODE_MIRROR_THEME_MAP: Record<MarkdownThemeName, Extension> = {
@@ -140,6 +142,7 @@ export const MarkdownSourceEditor = forwardRef<MarkdownSourceEditorRef, Markdown
       onReady,
       searchQuery = "",
       searchIndex = 0,
+      extensions: extraExtensions,
     },
     ref,
   ) => {
@@ -278,8 +281,9 @@ export const MarkdownSourceEditor = forwardRef<MarkdownSourceEditorRef, Markdown
           }
           if (update.selectionSet || update.docChanged) onSelectionChangeRef.current?.();
         }),
+        ...(extraExtensions ?? []),
       ];
-    }, [searchQuery, searchIndex]);
+    }, [searchQuery, searchIndex, extraExtensions]);
 
     const handlePasteCapture = useCallback((event: ReactClipboardEvent<HTMLDivElement>) => {
       if (readOnly || !onPasteFiles) return;
@@ -327,8 +331,10 @@ export const MarkdownSourceEditor = forwardRef<MarkdownSourceEditorRef, Markdown
           return;
         }
 
-        // AI Slash Command check on single key press
+        // AI Slash Command check on single key press; only consumers that open
+        // the assistant claim the trigger text.
         if (
+          onSlashCommandTrigger &&
           !event.ctrlKey &&
           !event.metaKey &&
           !event.altKey &&
