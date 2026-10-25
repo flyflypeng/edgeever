@@ -7,7 +7,10 @@ use crate::{
     resolve_remapped_memo_base, string_param, tags_from_json,
 };
 
-fn summary_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Value> {
+/// Upper bound for `memo.activity`; matches the cloud API's truncation.
+const MEMO_ACTIVITY_LIMIT: i64 = 20_000;
+
+fn summary_from_row(row: &rusqlite::Row<'_>, with_content: bool) -> rusqlite::Result<Value> {
     let tags: String = row.get("tags_json")?;
     let markdown: String = row.get("content_markdown")?;
     let mut summary = json!({
@@ -25,8 +28,13 @@ fn summary_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Value> {
         "deletedAt": row.get::<_, Option<String>>("deleted_at")?,
     });
     let metadata = note_list_metadata(&markdown);
-    if let (Some(summary), Some(metadata)) = (summary.as_object_mut(), metadata.as_object()) {
-        summary.extend(metadata.clone());
+    if let Some(summary) = summary.as_object_mut() {
+        if let Some(metadata) = metadata.as_object() {
+            summary.extend(metadata.clone());
+        }
+        if with_content {
+            summary.insert("contentMarkdown".to_owned(), Value::String(markdown));
+        }
     }
     Ok(summary)
 }
@@ -425,6 +433,10 @@ pub(crate) fn list_memos(database: &Connection, params: &Value) -> Result<Value,
         .unwrap_or("")
         .trim()
         .to_owned();
+    let created_from = optional_trimmed_str(params, "createdFrom");
+    let created_to = optional_trimmed_str(params, "createdTo");
+    let pinned_first = bool_param(params, "pinnedFirst", true);
+    let with_content = bool_param(params, "withContent", false);
     let filter = match params.get("filter").and_then(Value::as_str) {
         Some("pinned") => " AND m.is_pinned = 1",
         Some("tagged") => " AND json_array_length(m.tags_json) > 0",
@@ -440,6 +452,7 @@ pub(crate) fn list_memos(database: &Connection, params: &Value) -> Result<Value,
             "COALESCE(m.title, m.excerpt) COLLATE NOCASE DESC, m.updated_at DESC, m.id DESC"
         }
         _ if trash => "m.deleted_at DESC, m.id DESC",
+        _ if !pinned_first => "m.updated_at DESC, m.id DESC",
         _ => "m.is_pinned DESC, m.updated_at DESC, m.id DESC",
     };
     let limit = params
@@ -452,6 +465,8 @@ pub(crate) fn list_memos(database: &Connection, params: &Value) -> Result<Value,
         .and_then(Value::as_i64)
         .unwrap_or(0)
         .max(0);
+    // created_at is an ISO-8601 UTC string, so lexical comparison matches the
+    // cloud API: createdFrom is inclusive and createdTo is exclusive.
     let where_clause = format!(
         "m.is_deleted = ?1 AND (?2 = '' OR lower(COALESCE(m.title, '') || ' ' || m.excerpt || ' ' || c.content_text || ' ' || m.tags_json) LIKE '%' || lower(?2) || '%')
             AND (?3 IS NULL OR m.notebook_id = ?3)
@@ -459,13 +474,15 @@ pub(crate) fn list_memos(database: &Connection, params: &Value) -> Result<Value,
             AND (?5 = '' OR EXISTS (
                 SELECT 1 FROM json_each(m.tags_json) AS memo_tag
                 WHERE LOWER(TRIM(CAST(memo_tag.value AS TEXT))) = LOWER(?5)
-            )){filter}"
+            ))
+            AND (?6 IS NULL OR m.created_at >= ?6)
+            AND (?7 IS NULL OR m.created_at < ?7){filter}"
     );
     let query = format!("SELECT m.id, m.notebook_id, m.title, m.excerpt, m.tags_json, m.is_pinned, m.is_archived, m.is_deleted,
                 c.revision, m.created_at, m.updated_at, m.deleted_at, c.content_markdown
            FROM memos m JOIN memo_contents c ON c.memo_id = m.id
           WHERE {where_clause}
-          ORDER BY {order} LIMIT ?6 OFFSET ?7");
+          ORDER BY {order} LIMIT ?8 OFFSET ?9");
     let mut statement = database.prepare(&query).map_err(|e| e.to_string())?;
     let rows = statement
         .query_map(
@@ -475,10 +492,12 @@ pub(crate) fn list_memos(database: &Connection, params: &Value) -> Result<Value,
                 notebook_id,
                 notebook_ids_json,
                 tag,
+                created_from,
+                created_to,
                 limit,
                 offset
             ],
-            summary_from_row,
+            |row| summary_from_row(row, with_content),
         )
         .map_err(|e| e.to_string())?;
     let memos: Result<Vec<_>, _> = rows.collect();
@@ -488,7 +507,15 @@ pub(crate) fn list_memos(database: &Connection, params: &Value) -> Result<Value,
     let total: i64 = database
         .query_row(
             &count_query,
-            rusqlite::params![trash as i64, q, notebook_id, notebook_ids_json, tag],
+            rusqlite::params![
+                trash as i64,
+                q,
+                notebook_id,
+                notebook_ids_json,
+                tag,
+                created_from,
+                created_to
+            ],
             |row| row.get(0),
         )
         .map_err(|e| e.to_string())?;
@@ -499,6 +526,40 @@ pub(crate) fn list_memos(database: &Connection, params: &Value) -> Result<Value,
         None
     };
     Ok(json!({ "memos": memos, "totalCount": total, "nextCursor": next_cursor }))
+}
+
+fn optional_trimmed_str<'a>(params: &'a Value, key: &str) -> Option<&'a str> {
+    params
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
+/// Lightweight activity rows for the Jot heatmap and tag counts. Only the
+/// notebook itself is matched (no descendants) and trashed notes are skipped.
+pub(crate) fn list_memo_activity(database: &Connection, params: &Value) -> Result<Value, String> {
+    let notebook_id = optional_trimmed_str(params, "notebookId");
+    let mut statement = database
+        .prepare(
+            "SELECT id, created_at, tags_json FROM memos
+              WHERE is_deleted = 0 AND (?1 IS NULL OR notebook_id = ?1)
+              ORDER BY created_at DESC, id DESC LIMIT ?2",
+        )
+        .map_err(|e| e.to_string())?;
+    let memos = statement
+        .query_map(rusqlite::params![notebook_id, MEMO_ACTIVITY_LIMIT], |row| {
+            let tags: String = row.get("tags_json")?;
+            Ok(json!({
+                "id": row.get::<_, String>("id")?,
+                "createdAt": row.get::<_, String>("created_at")?,
+                "tags": tags_from_json(&tags),
+            }))
+        })
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
+    Ok(json!({ "memos": memos }))
 }
 
 pub(crate) fn create_memo(database: &Connection, params: &Value) -> Result<Value, String> {
@@ -789,4 +850,133 @@ pub(crate) fn restore_memo_revision(
         }),
     )?;
     memo_value(database, &memo_id, true).map(|memo| json!({ "memo": memo }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ids(value: &Value) -> Vec<&str> {
+        value["memos"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|memo| memo["id"].as_str().unwrap())
+            .collect()
+    }
+
+    fn jot_database() -> Connection {
+        let database = Connection::open_in_memory().unwrap();
+        database
+            .execute_batch(
+                "CREATE TABLE memos (
+                   id TEXT PRIMARY KEY,
+                   notebook_id TEXT NOT NULL,
+                   title TEXT,
+                   excerpt TEXT NOT NULL,
+                   tags_json TEXT NOT NULL,
+                   is_pinned INTEGER NOT NULL,
+                   is_archived INTEGER NOT NULL DEFAULT 0,
+                   is_deleted INTEGER NOT NULL,
+                   created_at TEXT NOT NULL,
+                   updated_at TEXT NOT NULL,
+                   deleted_at TEXT
+                 );
+                 CREATE TABLE memo_contents (
+                   memo_id TEXT PRIMARY KEY REFERENCES memos(id) ON DELETE CASCADE,
+                   content_markdown TEXT NOT NULL,
+                   content_text TEXT NOT NULL,
+                   revision INTEGER NOT NULL
+                 );
+                 INSERT INTO memos (id, notebook_id, title, excerpt, tags_json, is_pinned, is_deleted, created_at, updated_at, deleted_at) VALUES
+                   ('a', 'nb_inbox', NULL, 'alpha', '[\"x\"]', 0, 0, '2026-10-01T00:00:00.000Z', '2026-10-05T00:00:00.000Z', NULL),
+                   ('b', 'nb_inbox', NULL, 'beta', '[]', 1, 0, '2026-10-02T00:00:00.000Z', '2026-10-03T00:00:00.000Z', NULL),
+                   ('c', 'nb_inbox', NULL, 'gamma', '[\"y\",\"x\"]', 0, 0, '2026-10-03T00:00:00.000Z', '2026-10-04T00:00:00.000Z', NULL),
+                   ('d', 'nb_child', NULL, 'delta', '[]', 0, 0, '2026-10-04T00:00:00.000Z', '2026-10-06T00:00:00.000Z', NULL),
+                   ('e', 'nb_inbox', NULL, 'trashed', '[\"x\"]', 0, 1, '2026-10-05T00:00:00.000Z', '2026-10-07T00:00:00.000Z', '2026-10-07T00:00:00.000Z');
+                 INSERT INTO memo_contents (memo_id, content_markdown, content_text, revision)
+                   SELECT id, excerpt || ' body', excerpt || ' body', 1 FROM memos;",
+            )
+            .unwrap();
+        database
+    }
+
+    #[test]
+    fn list_memos_defaults_keep_pinned_first_and_omit_content() {
+        let database = jot_database();
+        let listed = list_memos(&database, &json!({ "notebookId": "nb_inbox" })).unwrap();
+        assert_eq!(ids(&listed), vec!["b", "a", "c"]);
+        assert_eq!(listed["totalCount"], 3);
+        assert!(listed["memos"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|memo| memo.get("contentMarkdown").is_none()));
+    }
+
+    #[test]
+    fn list_memos_can_drop_pinned_priority() {
+        let database = jot_database();
+        let params = json!({ "notebookId": "nb_inbox", "pinnedFirst": false });
+        let listed = list_memos(&database, &params).unwrap();
+        assert_eq!(ids(&listed), vec!["a", "c", "b"]);
+    }
+
+    #[test]
+    fn list_memos_filters_created_range_inclusive_from_exclusive_to() {
+        let database = jot_database();
+        let range = |from: Option<&str>, to: Option<&str>| {
+            let params = json!({
+                "notebookId": "nb_inbox",
+                "sort": "created-desc",
+                "createdFrom": from,
+                "createdTo": to,
+            });
+            list_memos(&database, &params).unwrap()
+        };
+        let day = range(
+            Some("2026-10-02T00:00:00.000Z"),
+            Some("2026-10-03T00:00:00.000Z"),
+        );
+        assert_eq!(ids(&day), vec!["b"]);
+        assert_eq!(day["totalCount"], 1);
+        assert!(day["nextCursor"].is_null());
+        let from_only = range(Some("2026-10-02T00:00:00.000Z"), None);
+        assert_eq!(ids(&from_only), vec!["c", "b"]);
+        let to_only = range(None, Some("2026-10-02T00:00:00.000Z"));
+        assert_eq!(ids(&to_only), vec!["a"]);
+        assert_eq!(ids(&range(None, None)), vec!["c", "b", "a"]);
+    }
+
+    #[test]
+    fn list_memos_with_content_includes_markdown() {
+        let database = jot_database();
+        let params = json!({
+            "notebookId": "nb_inbox",
+            "sort": "created-desc",
+            "withContent": true,
+            "limit": 1,
+        });
+        let listed = list_memos(&database, &params).unwrap();
+        assert_eq!(ids(&listed), vec!["c"]);
+        assert_eq!(listed["memos"][0]["contentMarkdown"], "gamma body");
+        assert_eq!(listed["nextCursor"], "1");
+    }
+
+    #[test]
+    fn memo_activity_matches_only_the_notebook_itself_and_skips_trash() {
+        let database = jot_database();
+        let inbox = list_memo_activity(&database, &json!({ "notebookId": "nb_inbox" })).unwrap();
+        assert_eq!(ids(&inbox), vec!["c", "b", "a"]);
+        assert_eq!(
+            inbox["memos"][0],
+            json!({ "id": "c", "createdAt": "2026-10-03T00:00:00.000Z", "tags": ["y", "x"] })
+        );
+        assert_eq!(inbox["memos"][1]["tags"], json!([]));
+
+        for params in [json!({}), json!({ "notebookId": null })] {
+            let workspace = list_memo_activity(&database, &params).unwrap();
+            assert_eq!(ids(&workspace), vec!["d", "c", "b", "a"]);
+        }
+    }
 }

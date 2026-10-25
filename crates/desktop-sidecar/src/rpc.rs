@@ -12,8 +12,8 @@ use crate::catalog::{
 };
 use crate::database::{backup_database, list_backups, restore_database};
 use crate::memo::{
-    cache_memo_revision, create_memo, delete_memo, delete_memos, empty_trash, list_memo_revisions,
-    list_memos, memo_value, merge_memos, move_memos, pin_memos, restore_memo,
+    cache_memo_revision, create_memo, delete_memo, delete_memos, empty_trash, list_memo_activity,
+    list_memo_revisions, list_memos, memo_value, merge_memos, move_memos, pin_memos, restore_memo,
     restore_memo_revision, update_memo,
 };
 use crate::sync::{
@@ -134,6 +134,7 @@ pub(crate) fn handle(
         "memo.pinBatch" => pin_memos(database, &request.params),
         "memo.merge" => merge_memos(database, &request.params),
         "memo.list" => list_memos(database, &request.params),
+        "memo.activity" => list_memo_activity(database, &request.params),
         "memo.get" => {
             let memo_id = string_param(&request.params, "memoId")?;
             memo_value(

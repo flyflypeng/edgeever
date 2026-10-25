@@ -178,6 +178,71 @@ assert.equal(
 );
 assert.equal((await request("memo.emptyTrash")).deleted, 1, "deleted-notebook fixture should not leak into later scenarios");
 
+// Jot (随记): created-range filters, pinnedFirst=false, withContent, and the
+// notebook-only activity query. Remote upserts let the fixtures control
+// timestamps and pin state precisely.
+const jotNotebook = notebookPayload("nb_e2e_jot");
+const jotChildNotebook = notebookPayload("nb_e2e_jot_child", { parentId: jotNotebook.id });
+await request("sync.apply", {
+  changes: [jotNotebook, jotChildNotebook].map((notebook) => ({ entityType: "notebook", operation: "upsert", entityId: notebook.id, notebook, memo: null })),
+});
+const jotMemo = (id, overrides) => ({ ...remoteMemo(id, { notebookId: jotNotebook.id }), ...overrides });
+for (const memo of [
+  jotMemo("memo_e2e_jot_old", { tags: ["jot-x"], createdAt: "2026-10-01T08:00:00.000Z", updatedAt: "2026-10-09T00:00:00.000Z" }),
+  jotMemo("memo_e2e_jot_pinned", { isPinned: true, createdAt: "2026-10-02T00:00:00.000Z", updatedAt: "2026-10-03T00:00:00.000Z" }),
+  jotMemo("memo_e2e_jot_new", { tags: ["jot-y", "jot-x"], contentMarkdown: "jot body", contentText: "jot body", createdAt: "2026-10-02T23:59:59.999Z", updatedAt: "2026-10-04T00:00:00.000Z" }),
+  jotMemo("memo_e2e_jot_child", { notebookId: jotChildNotebook.id, createdAt: "2026-10-05T00:00:00.000Z", updatedAt: "2026-10-05T00:00:00.000Z" }),
+  jotMemo("memo_e2e_jot_trashed", { isDeleted: true, deletedAt: "2026-10-06T00:00:00.000Z", createdAt: "2026-10-06T00:00:00.000Z", updatedAt: "2026-10-06T00:00:00.000Z" }),
+]) await applyRemoteMemo(memo);
+const jotIds = (result) => result.memos.map((memo) => memo.id);
+const jotDefault = await request("memo.list", { notebookId: jotNotebook.id, limit: 20 });
+assert.deepEqual(jotIds(jotDefault), ["memo_e2e_jot_pinned", "memo_e2e_jot_old", "memo_e2e_jot_new"], "default list order must keep pinned notes first");
+assert.ok(jotDefault.memos.every((memo) => !Object.hasOwn(memo, "contentMarkdown")), "default list rows must not include content");
+assert.deepEqual(
+  jotIds(await request("memo.list", { notebookId: jotNotebook.id, pinnedFirst: false, limit: 20 })),
+  ["memo_e2e_jot_old", "memo_e2e_jot_new", "memo_e2e_jot_pinned"],
+  "pinnedFirst=false must drop pinned priority from the default sort",
+);
+assert.deepEqual(
+  jotIds(await request("memo.list", { notebookId: jotNotebook.id, sort: "created-desc", pinnedFirst: false, limit: 20 })),
+  ["memo_e2e_jot_new", "memo_e2e_jot_pinned", "memo_e2e_jot_old"],
+);
+const jotDay = await request("memo.list", {
+  notebookId: jotNotebook.id,
+  sort: "created-desc",
+  createdFrom: "2026-10-02T00:00:00.000Z",
+  createdTo: "2026-10-03T00:00:00.000Z",
+  limit: 20,
+});
+assert.deepEqual(jotIds(jotDay), ["memo_e2e_jot_new", "memo_e2e_jot_pinned"], "createdFrom is inclusive and createdTo is exclusive");
+assert.equal(jotDay.totalCount, 2, "created range must apply to the total count");
+assert.deepEqual(
+  jotIds(await request("memo.list", { notebookId: jotNotebook.id, createdTo: "2026-10-02T00:00:00.000Z", limit: 20 })),
+  ["memo_e2e_jot_old"],
+  "createdTo must exclude notes created exactly at the bound",
+);
+const jotWithContent = await request("memo.list", { notebookId: jotNotebook.id, sort: "created-desc", pinnedFirst: false, withContent: true, limit: 1 });
+assert.deepEqual(jotIds(jotWithContent), ["memo_e2e_jot_new"]);
+assert.equal(jotWithContent.memos[0].contentMarkdown, "jot body", "withContent must include the markdown body");
+assert.equal(jotWithContent.nextCursor, "1");
+const jotActivity = await request("memo.activity", { notebookId: jotNotebook.id });
+assert.deepEqual(jotActivity, {
+  memos: [
+    { id: "memo_e2e_jot_new", createdAt: "2026-10-02T23:59:59.999Z", tags: ["jot-y", "jot-x"] },
+    { id: "memo_e2e_jot_pinned", createdAt: "2026-10-02T00:00:00.000Z", tags: [] },
+    { id: "memo_e2e_jot_old", createdAt: "2026-10-01T08:00:00.000Z", tags: ["jot-x"] },
+  ],
+}, "activity must cover only the notebook itself, skip trash, and sort by created_at desc");
+for (const params of [{}, { notebookId: null }]) {
+  const workspaceActivity = await request("memo.activity", params);
+  const workspaceIds = jotIds(workspaceActivity);
+  assert.ok(workspaceIds.includes("memo_e2e_jot_child"), "workspace activity should include every notebook");
+  assert.ok(!workspaceIds.includes("memo_e2e_jot_trashed"), "workspace activity must skip trashed notes");
+  const createdAt = workspaceActivity.memos.map((memo) => memo.createdAt);
+  assert.deepEqual(createdAt, [...createdAt].sort().reverse(), "workspace activity should be sorted newest first");
+}
+assert.equal((await request("memo.emptyTrash")).deleted, 1, "jot fixtures should not leak trashed notes into later scenarios");
+
 const first = await request("memo.create", { notebookId: inbox.id, title: "Local first", contentMarkdown: "searchable body", tags: ["local"] });
 assert.deepEqual(await request("sync.bootstrap.prepare"), { clearedSeedData: false, rebuiltMirror: false });
 assert.equal((await request("memo.get", { memoId: first.memo.id })).memo.id, first.memo.id, "bootstrap preparation must preserve local user data");
@@ -591,4 +656,4 @@ assert.equal(recoveredUpdate.status, "pending", "missing-memo edits should recov
 
 child.stdin.end();
 await new Promise((resolve) => child.once("close", resolve));
-console.log(JSON.stringify({ ok: true, checked: ["memo.create", "memo.list.search", "memo.list.noteKind", "memo.list.tag", "memo.list.subtree", "memo.update", "memo.update.coalesce", "memo.revisions", "memo.restoreRevision", "memo.revision.cache", "tag.rename", "memo.moveBatch", "memo.pinBatch", "memo.deleteBatch", "memo.restore", "memo.emptyTrash", "memo.merge", "template.cache", "template.create.payload", "template.delete", "storage.backup", "storage.backups", "storage.restore", "sync.apply.merge-page-order", "sync.apply.deleted-notebook", "sync.apply.renamed-inbox", "sync.outbox", "sync.outbox.notebook-remap", "sync.outbox.notebook-remap-rollback", "sync.outbox.retry", "sync.outbox.recoverMemoUpdate", "sync.outbox.discard", "notebook.delete.empty-tree", "notebook.delete.not-empty"] }));
+console.log(JSON.stringify({ ok: true, checked: ["memo.create", "memo.list.search", "memo.list.noteKind", "memo.list.tag", "memo.list.subtree", "memo.list.createdRange", "memo.list.pinnedFirst", "memo.list.withContent", "memo.activity", "memo.update", "memo.update.coalesce", "memo.revisions", "memo.restoreRevision", "memo.revision.cache", "tag.rename", "memo.moveBatch", "memo.pinBatch", "memo.deleteBatch", "memo.restore", "memo.emptyTrash", "memo.merge", "template.cache", "template.create.payload", "template.delete", "storage.backup", "storage.backups", "storage.restore", "sync.apply.merge-page-order", "sync.apply.deleted-notebook", "sync.apply.renamed-inbox", "sync.outbox", "sync.outbox.notebook-remap", "sync.outbox.notebook-remap-rollback", "sync.outbox.retry", "sync.outbox.recoverMemoUpdate", "sync.outbox.discard", "notebook.delete.empty-tree", "notebook.delete.not-empty"] }));
