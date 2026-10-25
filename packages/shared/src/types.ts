@@ -39,7 +39,13 @@ export type MemoSummary = {
   createdAt: string;
   updatedAt: string;
   deletedAt: string | null;
+  /** Present only when the list was requested with `withContent`. */
+  contentMarkdown?: string;
 };
+
+/** Lightweight per-memo data for jot activity (heatmap and tag counts). */
+export type MemoActivityItem = { id: string; createdAt: string; tags: string[] };
+export type MemoActivityResponse = { memos: MemoActivityItem[] };
 
 export type MemoDetail = MemoSummary & {
   contentJson: TiptapDoc;

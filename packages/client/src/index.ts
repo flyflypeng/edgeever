@@ -26,6 +26,7 @@ import type {
   JsonBackupNotebook,
   JsonBackupAiPrompt,
   JsonBackupRevision,
+  MemoActivityResponse,
   MemoDetail,
   MemoEditSession,
   MemoRevision,
@@ -1223,6 +1224,14 @@ export const createEdgeEverClient = (options: EdgeEverClientOptions = {}) => {
       filter?: MemoFilterMode;
       cursor?: string | null;
       limit?: number;
+      /** Inclusive ISO lower bound for created_at. */
+      createdFrom?: string;
+      /** Exclusive ISO upper bound for created_at. */
+      createdTo?: string;
+      /** Defaults to true; false keeps pinned notes in their natural sort position. */
+      pinnedFirst?: boolean;
+      /** Include contentMarkdown on every summary. */
+      withContent?: boolean;
     }) => {
       const search = new URLSearchParams();
 
@@ -1262,7 +1271,32 @@ export const createEdgeEverClient = (options: EdgeEverClientOptions = {}) => {
         search.set("limit", String(params.limit));
       }
 
+      if (params.createdFrom) {
+        search.set("createdFrom", params.createdFrom);
+      }
+
+      if (params.createdTo) {
+        search.set("createdTo", params.createdTo);
+      }
+
+      if (params.pinnedFirst === false) {
+        search.set("pinnedFirst", "0");
+      }
+
+      if (params.withContent) {
+        search.set("withContent", "1");
+      }
+
       return request<ListMemosResponse>(`/api/v1/memos?${search.toString()}`);
+    },
+
+    listMemoActivity: (params: { notebookId?: string | null } = {}) => {
+      const search = new URLSearchParams();
+      if (params.notebookId) {
+        search.set("notebookId", params.notebookId);
+      }
+      const query = search.toString();
+      return request<MemoActivityResponse>(`/api/v1/memos/activity${query ? `?${query}` : ""}`);
     },
 
     createMemo: (payload: {

@@ -16,7 +16,7 @@ import type { AppContext, AppEnv, AuditActor, Bindings } from "./api-context";
 import { AppError } from "./app-error";
 import { createId } from "./entity-utils";
 import { apiError, badRequest, notFound } from "./http-errors";
-import type { ListMemosInput, ListMemosResult } from "./memo-list-service";
+import type { ListMemoActivityInput, ListMemoActivityResult, ListMemosInput, ListMemosResult } from "./memo-list-service";
 import { getActorLabel, getAuditActor, getWorkspaceId, requireScopes } from "./request-auth";
 import { deleteReleasedResourceObjects } from "./resource-service";
 import type { DatabaseAdapter } from "./storage-contract";
@@ -74,6 +74,7 @@ type MemoRouteDependencies = {
     limit: number,
   ) => Promise<MemoRevision[]>;
   listMemos: (database: DatabaseAdapter, input: ListMemosInput) => Promise<ListMemosResult>;
+  listMemoActivity: (database: DatabaseAdapter, input: ListMemoActivityInput) => Promise<ListMemoActivityResult>;
   duplicateMemo: (
     context: AppContext,
     memoId: string,
@@ -139,6 +140,18 @@ export const registerMemoRoutes = (
     const denied = requireScopes(context, "read:memos");
     if (denied) return denied;
 
+    // created_at is stored as a canonical ISO string, so normalized bounds compare lexically.
+    const createdBounds: { createdFrom?: string; createdTo?: string } = {};
+    for (const key of ["createdFrom", "createdTo"] as const) {
+      const raw = context.req.query(key)?.trim();
+      if (!raw) continue;
+      const time = new Date(raw);
+      if (Number.isNaN(time.getTime())) {
+        return apiError(context, "invalid_params", `${key} must be an ISO 8601 date or date-time.`, 400);
+      }
+      createdBounds[key] = time.toISOString();
+    }
+
     return context.json(await dependencies.listMemos(context.env.storage.db, {
       workspaceId: getWorkspaceId(context),
       notebookId: context.req.query("notebookId"),
@@ -150,6 +163,20 @@ export const registerMemoRoutes = (
       filter: context.req.query("filter"),
       limit: Number(context.req.query("limit") ?? 100),
       cursor: context.req.query("cursor"),
+      ...createdBounds,
+      ...(context.req.query("pinnedFirst") === "0" ? { pinnedFirst: false } : {}),
+      ...(context.req.query("withContent") === "1" ? { withContent: true } : {}),
+    }));
+  });
+
+  // Registered before /api/v1/memos/:id so "activity" is not read as a memo id.
+  app.get("/api/v1/memos/activity", async (context) => {
+    const denied = requireScopes(context, "read:memos");
+    if (denied) return denied;
+
+    return context.json(await dependencies.listMemoActivity(context.env.storage.db, {
+      workspaceId: getWorkspaceId(context),
+      notebookId: context.req.query("notebookId") || null,
     }));
   });
 

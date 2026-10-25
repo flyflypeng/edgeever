@@ -7,6 +7,7 @@ import {
   getInfographicSummary,
   getPosterSummary,
   getTableSummary,
+  type MemoActivityItem,
   type MemoSummary,
 } from "@edgeever/shared";
 import { clampNumber, parseJsonArray } from "./entity-utils";
@@ -36,6 +37,9 @@ type MemoListFilterMode = "all" | "tagged" | "untagged" | "pinned";
 type MemoListCursor = {
   sort: MemoListSortMode;
   id: string;
+  // Only written when pinned memos are not ordered first, so cursors from the
+  // two orderings never mix and default cursors keep their original shape.
+  pinnedFirst?: false;
   pinned?: number;
   updatedAt?: string;
   createdAt?: string;
@@ -54,6 +58,14 @@ export type ListMemosInput = {
   filter?: string;
   limit?: number;
   cursor?: string;
+  /** Inclusive ISO lower bound for created_at. */
+  createdFrom?: string;
+  /** Exclusive ISO upper bound for created_at. */
+  createdTo?: string;
+  /** Defaults to true; false drops is_pinned from ordering and cursors. */
+  pinnedFirst?: boolean;
+  /** Include contentMarkdown on every summary. */
+  withContent?: boolean;
 };
 
 export type ListMemosResult = {
@@ -62,8 +74,18 @@ export type ListMemosResult = {
   nextCursor: string | null;
 };
 
+export type ListMemoActivityInput = {
+  workspaceId: string;
+  notebookId?: string | null;
+};
+
+export type ListMemoActivityResult = {
+  memos: MemoActivityItem[];
+};
+
 const DEFAULT_MEMO_LIST_LIMIT = 100;
 const MAX_MEMO_LIST_LIMIT = 200;
+const MAX_MEMO_ACTIVITY_ROWS = 20000;
 
 export const mapMemoSummary = (row: MemoSummaryRow): MemoSummary => ({
   id: row.id,
@@ -107,10 +129,12 @@ const encodeMemoListCursor = (
   memo: MemoSummaryRow,
   sort: MemoListSortMode,
   includeTrash: boolean,
+  pinnedFirst: boolean,
 ) => {
   const cursor: MemoListCursor = { sort, id: memo.id };
+  if (!pinnedFirst) cursor.pinnedFirst = false;
   if (includeTrash) cursor.deletedAt = memo.deleted_at;
-  else cursor.pinned = memo.is_pinned;
+  else if (pinnedFirst) cursor.pinned = memo.is_pinned;
 
   if (sort === "created-desc") cursor.createdAt = memo.created_at;
   else if (isTitleSort(sort)) {
@@ -127,6 +151,7 @@ const encodeMemoListCursor = (
 const decodeMemoListCursor = (
   value: string | undefined,
   sort: MemoListSortMode,
+  pinnedFirst: boolean,
 ): MemoListCursor | null => {
   if (!value) return null;
 
@@ -135,7 +160,7 @@ const decodeMemoListCursor = (
     const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=");
     const bytes = Uint8Array.from(atob(padded), (character) => character.charCodeAt(0));
     const cursor = JSON.parse(new TextDecoder().decode(bytes)) as Partial<MemoListCursor>;
-    return cursor.sort === sort && typeof cursor.id === "string"
+    return cursor.sort === sort && typeof cursor.id === "string" && (cursor.pinnedFirst !== false) === pinnedFirst
       ? cursor as MemoListCursor
       : null;
   } catch {
@@ -162,12 +187,15 @@ export const listMemos = async (
   const query = input.query?.trim();
   const tag = input.tag?.trim();
   const includeTrash = input.includeTrash === true;
+  const pinnedFirst = input.pinnedFirst !== false;
+  const withContent = input.withContent === true;
   const sort = normalizeMemoListSort(input.sort);
   const filter = normalizeMemoListFilter(input.filter);
   const limit = clampNumber(input.limit ?? DEFAULT_MEMO_LIST_LIMIT, 1, MAX_MEMO_LIST_LIMIT);
-  const cursor = decodeMemoListCursor(input.cursor, sort);
+  const cursor = decodeMemoListCursor(input.cursor, sort, pinnedFirst);
   const deletedClause = includeTrash ? "m.is_deleted = 1" : "m.is_deleted = 0";
   const titleSortExpression = `LOWER(COALESCE(NULLIF(m.title, ''), '${DEFAULT_MEMO_TITLE}'))`;
+  const pinnedOrder = pinnedFirst ? "m.is_pinned DESC, " : "";
   const baseConditions = ["m.workspace_id = ?", deletedClause];
   const baseBinds: unknown[] = [input.workspaceId];
 
@@ -208,14 +236,23 @@ export const listMemos = async (
   else if (filter === "untagged") baseConditions.push("m.tags_json = '[]'");
   else if (filter === "pinned") baseConditions.push("m.is_pinned = 1");
 
+  if (input.createdFrom) {
+    baseConditions.push("m.created_at >= ?");
+    baseBinds.push(input.createdFrom);
+  }
+  if (input.createdTo) {
+    baseConditions.push("m.created_at < ?");
+    baseBinds.push(input.createdTo);
+  }
+
   const getOrderBy = () => {
     if (includeTrash) return "m.deleted_at DESC, m.id DESC";
-    if (sort === "created-desc") return "m.is_pinned DESC, m.created_at DESC, m.id DESC";
+    if (sort === "created-desc") return `${pinnedOrder}m.created_at DESC, m.id DESC`;
     if (isTitleSort(sort)) {
       const direction = sort === "title-desc" ? "DESC" : "ASC";
-      return `m.is_pinned DESC, ${titleSortExpression} ${direction}, m.updated_at DESC, m.id DESC`;
+      return `${pinnedOrder}${titleSortExpression} ${direction}, m.updated_at DESC, m.id DESC`;
     }
-    return "m.is_pinned DESC, m.updated_at DESC, m.id DESC";
+    return `${pinnedOrder}m.updated_at DESC, m.id DESC`;
   };
 
   const cursorConditions = [...baseConditions];
@@ -224,18 +261,27 @@ export const listMemos = async (
     if (includeTrash) {
       cursorConditions.push("(m.deleted_at < ? OR (m.deleted_at = ? AND m.id < ?))");
       cursorBinds.push(cursor.deletedAt ?? "", cursor.deletedAt ?? "", cursor.id);
-    } else if (sort === "created-desc") {
-      cursorConditions.push("(m.is_pinned < ? OR (m.is_pinned = ? AND (m.created_at < ? OR (m.created_at = ? AND m.id < ?))))");
-      cursorBinds.push(cursor.pinned ?? 0, cursor.pinned ?? 0, cursor.createdAt ?? "", cursor.createdAt ?? "", cursor.id);
-    } else if (isTitleSort(sort)) {
-      const titleOperator = sort === "title-desc" ? "<" : ">";
-      cursorConditions.push(
-        `(m.is_pinned < ? OR (m.is_pinned = ? AND (${titleSortExpression} ${titleOperator} ? OR (${titleSortExpression} = ? AND (m.updated_at < ? OR (m.updated_at = ? AND m.id < ?))))))`,
-      );
-      cursorBinds.push(cursor.pinned ?? 0, cursor.pinned ?? 0, cursor.title ?? "", cursor.title ?? "", cursor.updatedAt ?? "", cursor.updatedAt ?? "", cursor.id);
     } else {
-      cursorConditions.push("(m.is_pinned < ? OR (m.is_pinned = ? AND (m.updated_at < ? OR (m.updated_at = ? AND m.id < ?))))");
-      cursorBinds.push(cursor.pinned ?? 0, cursor.pinned ?? 0, cursor.updatedAt ?? "", cursor.updatedAt ?? "", cursor.id);
+      let positionCondition: string;
+      let positionBinds: unknown[];
+      if (sort === "created-desc") {
+        positionCondition = "(m.created_at < ? OR (m.created_at = ? AND m.id < ?))";
+        positionBinds = [cursor.createdAt ?? "", cursor.createdAt ?? "", cursor.id];
+      } else if (isTitleSort(sort)) {
+        const titleOperator = sort === "title-desc" ? "<" : ">";
+        positionCondition = `(${titleSortExpression} ${titleOperator} ? OR (${titleSortExpression} = ? AND (m.updated_at < ? OR (m.updated_at = ? AND m.id < ?))))`;
+        positionBinds = [cursor.title ?? "", cursor.title ?? "", cursor.updatedAt ?? "", cursor.updatedAt ?? "", cursor.id];
+      } else {
+        positionCondition = "(m.updated_at < ? OR (m.updated_at = ? AND m.id < ?))";
+        positionBinds = [cursor.updatedAt ?? "", cursor.updatedAt ?? "", cursor.id];
+      }
+      if (pinnedFirst) {
+        cursorConditions.push(`(m.is_pinned < ? OR (m.is_pinned = ? AND ${positionCondition}))`);
+        cursorBinds.push(cursor.pinned ?? 0, cursor.pinned ?? 0, ...positionBinds);
+      } else {
+        cursorConditions.push(positionCondition);
+        cursorBinds.push(...positionBinds);
+      }
     }
   }
 
@@ -243,10 +289,12 @@ export const listMemos = async (
   const finish = (rows: MemoSummaryRow[], totalCount: number | undefined): ListMemosResult => {
     const page = rows.slice(0, limit);
     return {
-      memos: page.map(mapMemoSummary),
+      memos: page.map((row) => withContent
+        ? { ...mapMemoSummary(row), contentMarkdown: row.content_markdown ?? "" }
+        : mapMemoSummary(row)),
       totalCount: totalCount ?? page.length,
       nextCursor: rows.length > limit
-        ? encodeMemoListCursor(page[page.length - 1], sort, includeTrash)
+        ? encodeMemoListCursor(page[page.length - 1], sort, includeTrash, pinnedFirst)
         : null,
     };
   };
@@ -360,4 +408,31 @@ export const listMemos = async (
     ).bind(...baseBinds).first<{ count: number }>(),
   ]);
   return finish(rows.results, totalRow?.count);
+};
+
+/** Created-at and tags for every live memo directly in one notebook (or the workspace), newest first. */
+export const listMemoActivity = async (
+  database: DatabaseAdapter,
+  input: ListMemoActivityInput,
+): Promise<ListMemoActivityResult> => {
+  const conditions = ["workspace_id = ?", "is_deleted = 0"];
+  const binds: unknown[] = [input.workspaceId];
+  if (input.notebookId) {
+    conditions.push("notebook_id = ?");
+    binds.push(input.notebookId);
+  }
+  const rows = await database.prepare(
+    `SELECT id, created_at, tags_json
+     FROM memos
+     WHERE ${conditions.join(" AND ")}
+     ORDER BY created_at DESC, id DESC
+     LIMIT ?`,
+  ).bind(...binds, MAX_MEMO_ACTIVITY_ROWS).all<{ id: string; created_at: string; tags_json: string }>();
+  return {
+    memos: rows.results.map((row) => ({
+      id: row.id,
+      createdAt: row.created_at,
+      tags: parseJsonArray(row.tags_json),
+    })),
+  };
 };

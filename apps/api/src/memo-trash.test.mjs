@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { Hono } from "hono";
 import { AppError } from "./app-error.ts";
 import { apiError } from "./http-errors.ts";
-import { listMemos } from "./memo-list-service.ts";
+import { listMemoActivity, listMemos } from "./memo-list-service.ts";
 import { registerMemoRoutes } from "./memo-routes.ts";
 import {
   createMemoRecord,
@@ -79,6 +79,7 @@ const installation = () => {
     getMemoDetail,
     listMemoRevisions: notImplemented,
     listMemos,
+    listMemoActivity,
     mergeMemos: notImplemented,
     moveMemos: notImplemented,
     restoreMemo: restoreMemoRecord,
@@ -549,5 +550,93 @@ describe("trash route permissions", () => {
       { action: "memo.delete", actor_type: "agent", actor_id: "tok_agent" },
       { action: "memo.trash_empty", actor_type: "agent", actor_id: "tok_agent" },
     ]);
+  });
+});
+
+describe("jot list options against the real schema", () => {
+  const seedJotNotes = async (target) => {
+    target.sqlite.exec(`
+      INSERT INTO notebooks (id, workspace_id, parent_id, name, slug, sort_order)
+        VALUES ('nb_trips_child', '${WORKSPACE_ID}', 'nb_trips', 'Child', 'child', 0);
+    `);
+    const notes = {};
+    for (const [key, notebookId, createdAt, tags] of [
+      ["oldPinned", "nb_trips", "2026-10-23T10:00:00.000Z", ["old"]],
+      ["dayEarly", "nb_trips", "2026-10-24T16:00:00.000Z", ["idea"]],
+      ["dayLate", "nb_trips", "2026-10-25T15:59:59.999Z", []],
+      ["nextDay", "nb_trips", "2026-10-25T16:00:00.000Z", ["idea"]],
+      ["child", "nb_trips_child", "2026-10-25T12:00:00.000Z", ["child"]],
+      ["trashed", "nb_trips", "2026-10-25T13:00:00.000Z", []],
+    ]) {
+      const memo = await createMemoRecord(target.storage.db, WORKSPACE_ID, {
+        notebookId, title: key, contentMarkdown: `Body ${key}`, tags,
+      }, actor, "admin");
+      target.sqlite.query("UPDATE memos SET created_at = ? WHERE id = ?").run(createdAt, memo.id);
+      notes[key] = memo.id;
+    }
+    target.sqlite.query("UPDATE memos SET is_pinned = 1 WHERE id = ?").run(notes.oldPinned);
+    await trash(target, notes.trashed);
+    return notes;
+  };
+
+  test("filters by a created_at day range and counts only matching notes", async () => {
+    const target = installation();
+    const notes = await seedJotNotes(target);
+
+    for (const search of ["", "&q=Body"]) {
+      const response = await target.request(
+        `/api/v1/memos?notebookId=nb_trips&createdFrom=2026-10-25T00:00:00%2B08:00&createdTo=2026-10-26T00:00:00%2B08:00${search}`,
+      );
+      expect(response.status).toBe(200);
+      expect(response.body.memos.map((memo) => memo.id).sort()).toEqual([notes.dayEarly, notes.dayLate].sort());
+      expect(response.body.totalCount).toBe(2);
+    }
+    expect((await target.request("/api/v1/memos?createdTo=not-a-date")).body.error.code).toBe("invalid_params");
+  });
+
+  test("pages newest first without pinned priority and returns content on request", async () => {
+    const target = installation();
+    const notes = await seedJotNotes(target);
+
+    const pinnedFirst = await target.request("/api/v1/memos?notebookId=nb_trips&sort=created-desc");
+    expect(pinnedFirst.body.memos[0].id).toBe(notes.oldPinned);
+    expect(pinnedFirst.body.memos[0]).not.toHaveProperty("contentMarkdown");
+
+    const seen = [];
+    let cursor = "";
+    do {
+      const response = await target.request(
+        `/api/v1/memos?notebookId=nb_trips&sort=created-desc&pinnedFirst=0&withContent=1&limit=2${cursor ? `&cursor=${cursor}` : ""}`,
+      );
+      expect(response.status).toBe(200);
+      for (const memo of response.body.memos) {
+        seen.push(memo.id);
+        expect(memo.contentMarkdown).toContain("Body ");
+      }
+      cursor = response.body.nextCursor ?? "";
+    } while (cursor);
+    expect(seen).toEqual([notes.nextDay, notes.dayLate, notes.dayEarly, notes.oldPinned]);
+  });
+
+  test("lists activity for the notebook itself, excluding children and trash", async () => {
+    const target = installation();
+    const notes = await seedJotNotes(target);
+
+    const response = await target.request("/api/v1/memos/activity?notebookId=nb_trips");
+    expect(response).toEqual({
+      status: 200,
+      body: {
+        memos: [
+          { id: notes.nextDay, createdAt: "2026-10-25T16:00:00.000Z", tags: ["idea"] },
+          { id: notes.dayLate, createdAt: "2026-10-25T15:59:59.999Z", tags: [] },
+          { id: notes.dayEarly, createdAt: "2026-10-24T16:00:00.000Z", tags: ["idea"] },
+          { id: notes.oldPinned, createdAt: "2026-10-23T10:00:00.000Z", tags: ["old"] },
+        ],
+      },
+    });
+
+    const workspace = await target.request("/api/v1/memos/activity");
+    expect(workspace.body.memos.map((memo) => memo.id)).toContain(notes.child);
+    expect(workspace.body.memos.map((memo) => memo.id)).not.toContain(notes.trashed);
   });
 });

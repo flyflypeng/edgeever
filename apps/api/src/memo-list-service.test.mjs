@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { createDefaultDiagramDocument, serializeDiagramDocument } from "@edgeever/shared";
-import { listMemos, mapMemoSummary, toFtsQuery } from "./memo-list-service.ts";
+import { listMemoActivity, listMemos, mapMemoSummary, toFtsQuery } from "./memo-list-service.ts";
 
 const memoRow = (id, overrides = {}) => ({
   id,
@@ -180,5 +180,114 @@ describe("memo list service", () => {
     expect(database.calls[0].sql).not.toContain("memos_fts MATCH");
     expect(database.calls[0].sql).toContain("m.title LIKE ?");
     expect(database.calls[0].parameters).toContain("%---%");
+  });
+
+  test("bounds created_at in page and count queries for every search branch", async () => {
+    for (const query of [undefined, "hello", "---"]) {
+      const database = createDatabase();
+      await listMemos(database, {
+        workspaceId: "ws_1",
+        notebookId: "nb_inbox",
+        query,
+        createdFrom: "2026-10-24T16:00:00.000Z",
+        createdTo: "2026-10-25T16:00:00.000Z",
+      });
+
+      expect(database.calls).toHaveLength(2);
+      for (const call of database.calls) {
+        expect(call.sql).toContain("m.created_at >= ?");
+        expect(call.sql).toContain("m.created_at < ?");
+        const fromIndex = call.parameters.indexOf("2026-10-24T16:00:00.000Z");
+        expect(fromIndex).toBeGreaterThan(-1);
+        expect(call.parameters[fromIndex + 1]).toBe("2026-10-25T16:00:00.000Z");
+      }
+    }
+  });
+
+  test("keeps the default query free of jot-only conditions and content", async () => {
+    const database = createDatabase({ rows: [memoRow("memo_1")] });
+    const result = await listMemos(database, { workspaceId: "ws_1", sort: "created-desc" });
+
+    expect(database.calls[0].sql).toContain("ORDER BY m.is_pinned DESC, m.created_at DESC, m.id DESC");
+    expect(database.calls[0].sql).not.toContain("m.created_at >= ?");
+    expect(database.calls[0].parameters).toEqual(["ws_1", 101]);
+    expect(result.memos[0]).not.toHaveProperty("contentMarkdown");
+  });
+
+  test("orders and paginates without pinned priority when pinnedFirst is false", async () => {
+    for (const query of [undefined, "hello", "---"]) {
+      const firstDatabase = createDatabase({
+        rows: [memoRow("memo_3"), memoRow("memo_2", { is_pinned: 1 }), memoRow("memo_1")],
+        totalCount: 3,
+      });
+      const first = await listMemos(firstDatabase, {
+        workspaceId: "ws_1",
+        query,
+        sort: "created-desc",
+        pinnedFirst: false,
+        limit: 2,
+      });
+      const orderQuery = firstDatabase.calls.find((call) => call.sql.includes("ORDER BY"));
+      expect(orderQuery.sql).toContain("ORDER BY m.created_at DESC, m.id DESC");
+      expect(orderQuery.sql).not.toContain("is_pinned DESC");
+
+      const secondDatabase = createDatabase({ rows: [memoRow("memo_1")] });
+      await listMemos(secondDatabase, {
+        workspaceId: "ws_1",
+        query,
+        sort: "created-desc",
+        pinnedFirst: false,
+        limit: 2,
+        cursor: first.nextCursor,
+      });
+      const pageQuery = secondDatabase.calls.find((call) => call.sql.includes("ORDER BY"));
+      expect(pageQuery.sql).toContain("(m.created_at < ? OR (m.created_at = ? AND m.id < ?))");
+      expect(pageQuery.sql).not.toContain("m.is_pinned < ?");
+      expect(pageQuery.parameters).toContain("2026-08-02T00:00:00.000Z");
+      expect(pageQuery.parameters).toContain("memo_2");
+    }
+  });
+
+  test("ignores a cursor issued for the other pinned ordering", async () => {
+    const pinnedDatabase = createDatabase({ rows: [memoRow("memo_2"), memoRow("memo_1")], totalCount: 2 });
+    const pinnedCursor = (await listMemos(pinnedDatabase, { workspaceId: "ws_1", sort: "created-desc", limit: 1 })).nextCursor;
+    const unpinnedDatabase = createDatabase({ rows: [memoRow("memo_2"), memoRow("memo_1")], totalCount: 2 });
+    const unpinnedCursor = (await listMemos(unpinnedDatabase, {
+      workspaceId: "ws_1", sort: "created-desc", pinnedFirst: false, limit: 1,
+    })).nextCursor;
+
+    const mixedUnpinned = createDatabase();
+    await listMemos(mixedUnpinned, { workspaceId: "ws_1", sort: "created-desc", pinnedFirst: false, cursor: pinnedCursor });
+    expect(mixedUnpinned.calls[0].sql).not.toContain("m.created_at < ?");
+
+    const mixedPinned = createDatabase();
+    await listMemos(mixedPinned, { workspaceId: "ws_1", sort: "created-desc", cursor: unpinnedCursor });
+    expect(mixedPinned.calls[0].sql).not.toContain("m.created_at < ?");
+  });
+
+  test("returns markdown content only when requested", async () => {
+    const database = createDatabase({ rows: [memoRow("memo_1", { content_markdown: "# Hello\n\nBody" })] });
+    const result = await listMemos(database, { workspaceId: "ws_1", withContent: true });
+
+    expect(result.memos[0].contentMarkdown).toBe("# Hello\n\nBody");
+    expect(result.memos[0].excerpt).toBe("Excerpt memo_1");
+  });
+
+  test("lists activity for one notebook without descendants or trash", async () => {
+    const database = createDatabase({
+      rows: [{ id: "memo_2", created_at: "2026-10-25T01:00:00.000Z", tags_json: "[\"idea\"]" }],
+    });
+    const result = await listMemoActivity(database, { workspaceId: "ws_1", notebookId: "nb_inbox" });
+
+    expect(result).toEqual({ memos: [{ id: "memo_2", createdAt: "2026-10-25T01:00:00.000Z", tags: ["idea"] }] });
+    expect(database.calls[0].sql).toContain("workspace_id = ? AND is_deleted = 0 AND notebook_id = ?");
+    expect(database.calls[0].sql).toContain("ORDER BY created_at DESC, id DESC");
+    expect(database.calls[0].sql).not.toContain("RECURSIVE");
+    expect(database.calls[0].parameters).toEqual(["ws_1", "nb_inbox", 20000]);
+
+    const workspace = createDatabase();
+    await listMemoActivity(workspace, { workspaceId: "ws_1", notebookId: null });
+    expect(workspace.calls[0].sql).not.toContain("notebook_id = ?");
+    expect(workspace.calls[0].parameters).toEqual(["ws_1", 20000]);
   });
 });

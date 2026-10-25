@@ -438,6 +438,35 @@ describe("EdgeEver client HTTP contract", () => {
     expect(requestUrl).toBe("/api/v1/memos?tag=%E4%BA%A7%E5%93%81+%E5%92%8C+%E4%BA%A4%E4%BA%92");
   });
 
+  test("sends jot list options only when set and reads memo activity", async () => {
+    const requestUrls = [];
+    const client = createEdgeEverClient({
+      fetch: async (input) => {
+        requestUrls.push(String(input));
+        return jsonResponse({ memos: [], totalCount: 0, nextCursor: null });
+      },
+    });
+
+    await client.listMemos({ notebookId: "nb_inbox", pinnedFirst: true, withContent: false });
+    await client.listMemos({
+      notebookId: "nb_inbox",
+      sort: "created-desc",
+      createdFrom: "2026-10-24T16:00:00.000Z",
+      createdTo: "2026-10-25T16:00:00.000Z",
+      pinnedFirst: false,
+      withContent: true,
+    });
+    await client.listMemoActivity();
+    await client.listMemoActivity({ notebookId: "nb_inbox" });
+
+    expect(requestUrls).toEqual([
+      "/api/v1/memos?notebookId=nb_inbox",
+      "/api/v1/memos?notebookId=nb_inbox&sort=created-desc&createdFrom=2026-10-24T16%3A00%3A00.000Z&createdTo=2026-10-25T16%3A00%3A00.000Z&pinnedFirst=0&withContent=1",
+      "/api/v1/memos/activity",
+      "/api/v1/memos/activity?notebookId=nb_inbox",
+    ]);
+  });
+
   test("preserves API error codes and invokes unauthorized handling", async () => {
     let unauthorized = 0;
     const client = createEdgeEverClient({

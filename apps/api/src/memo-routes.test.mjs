@@ -31,6 +31,7 @@ const createDependencies = (overrides = {}) => ({
   emptyTrash: async () => 0,
   getMemoDetail: async () => null,
   listMemos: async () => ({ memos: [], totalCount: 0, nextCursor: null }),
+  listMemoActivity: async () => ({ memos: [] }),
   listMemoRevisions: async () => [],
   duplicateMemo: async () => ({ id: "memo_copy" }),
   mergeMemos: async () => ({ id: "memo_merged" }),
@@ -131,6 +132,76 @@ describe("memo route contracts", () => {
       limit: 25,
       cursor: "opaque",
     });
+  });
+
+  test("maps jot list options and normalizes created_at bounds", async () => {
+    let received;
+    const dependencies = createDependencies({
+      listMemos: async (...args) => {
+        received = args;
+        return { memos: [], totalCount: 0, nextCursor: null };
+      },
+    });
+    const response = await createApp(dependencies).request(
+      "/api/v1/memos?notebookId=nb_inbox&sort=created-desc&createdFrom=2026-10-25T00:00:00%2B08:00&createdTo=2026-10-25&pinnedFirst=0&withContent=1",
+      {},
+      environment,
+    );
+
+    expect(response.status).toBe(200);
+    expect(received[1]).toMatchObject({
+      notebookId: "nb_inbox",
+      sort: "created-desc",
+      createdFrom: "2026-10-24T16:00:00.000Z",
+      createdTo: "2026-10-25T00:00:00.000Z",
+      pinnedFirst: false,
+      withContent: true,
+    });
+  });
+
+  test("rejects invalid created_at bounds", async () => {
+    let called = false;
+    const dependencies = createDependencies({
+      listMemos: async () => {
+        called = true;
+        return { memos: [], totalCount: 0, nextCursor: null };
+      },
+    });
+    for (const query of ["createdFrom=yesterday", "createdTo=2026-13-45"]) {
+      const response = await createApp(dependencies).request(`/api/v1/memos?${query}`, {}, environment);
+      expect(response.status).toBe(400);
+      expect((await response.json()).error.code).toBe("invalid_params");
+    }
+    expect(called).toBe(false);
+  });
+
+  test("serves memo activity before the memo id route", async () => {
+    const received = [];
+    const dependencies = createDependencies({
+      getMemoDetail: async () => {
+        throw new Error("activity must not be read as a memo id");
+      },
+      listMemoActivity: async (...args) => {
+        received.push(args[1]);
+        return { memos: [{ id: "memo_1", createdAt: "2026-10-25T01:00:00.000Z", tags: ["idea"] }] };
+      },
+    });
+    const app = createApp(dependencies);
+
+    const response = await app.request("/api/v1/memos/activity?notebookId=nb_inbox", {}, environment);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      memos: [{ id: "memo_1", createdAt: "2026-10-25T01:00:00.000Z", tags: ["idea"] }],
+    });
+    await app.request("/api/v1/memos/activity", {}, environment);
+    expect(received).toEqual([
+      { workspaceId: "ws_1", notebookId: "nb_inbox" },
+      { workspaceId: "ws_1", notebookId: null },
+    ]);
+
+    const denied = await createApp(dependencies, { ...agentAuth, scopes: ["write:memos"] })
+      .request("/api/v1/memos/activity", {}, environment);
+    expect(denied.status).toBe(403);
   });
 
   test("validates and delegates memo creation", async () => {

@@ -114,7 +114,7 @@ import {
 import { duplicateMemoRecord } from "./memo-duplicate-service";
 
 export { createMemoEditSession, mergeMemosRecord, updateMemoRecord };
-import { listMemos } from "./memo-list-service";
+import { listMemoActivity, listMemos } from "./memo-list-service";
 import {
   registerUserRoutes,
 } from "./user-routes";
@@ -365,6 +365,7 @@ registerMemoRoutes(app, {
   emptyTrash: (...args) => emptyTrashMemosRecord(...args),
   getMemoDetail: (...args) => getMemoDetail(...args),
   listMemos: (...args) => listMemos(...args),
+  listMemoActivity: (...args) => listMemoActivity(...args),
   listMemoRevisions: (...args) => listMemoRevisionsService(...args, getMemoDetail, false),
   duplicateMemo: (...args) => duplicateMemoRecord(...args),
   mergeMemos: (...args) => mergeMemosRecord(...args),
