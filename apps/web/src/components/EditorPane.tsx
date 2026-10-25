@@ -115,8 +115,9 @@ import { ShareNoteImageDialog } from "./dialogs/ShareNoteImageDialog";
 import { AiSidebar, readAiSidebarOpen, readAiSidebarWidth, writeAiSidebarOpen } from "./ai-sidebar/AiSidebar";
 import { AiSidebarErrorBoundary } from "./ai-sidebar/AiSidebarErrorBoundary";
 import { api } from "@/lib/api";
-import { isDesktopResourceRuntime, stageDesktopResource, toDesktopResourceDownloadUrl, toDesktopResourceUrl } from "@/lib/desktop-resources";
-import { contentReferencesStagedResourceUrl, findMatchingMemoResource, repairMemoStagedResourceUrls, repairTiptapStagedResourceUrls } from "@/lib/staged-resource-repair";
+import { isDesktopResourceRuntime, toDesktopResourceDownloadUrl } from "@/lib/desktop-resources";
+import { contentReferencesStagedResourceUrl, repairMemoStagedResourceUrls, repairTiptapStagedResourceUrls } from "@/lib/staged-resource-repair";
+import { uploadEditorResourceFile } from "@/lib/editor-resource-upload";
 import { cn, parseTagsText } from "@/lib/utils";
 import {
   EDITOR_ARTICLE_ROW_GAP_PX,
@@ -160,7 +161,6 @@ import { NEW_IMAGE_WIDTH_PERCENT } from "@edgeever/shared/image-display";
 import { EdgeEverLink } from "@edgeever/shared/editor-link";
 import { createEdgeEverMathematics } from "@edgeever/shared/mathematics";
 import { codeBlockLowlight, EdgeEverCodeBlock } from "@/lib/code-block";
-import { shouldUploadWithPicGo, uploadImageWithPicGo } from "@/lib/picgo";
 import { compressImageForUpload } from "@/lib/image-compression";
 import { LOCAL_DATABASE_INTERRUPTED_EVENT, localDb, selectNewestLocalDraft, type MemoUpdateSyncPayload } from "@/lib/local-db";
 import { persistEmergencyDraft, readEmergencyDraft, removeEmergencyDraft } from "@/lib/emergency-draft";
@@ -998,50 +998,19 @@ const RichEditorPane = ({
   }, [focusMobileInputTarget, isMobileViewport, memo?.id, mobileDefaultEditMemoId, onMobileDefaultEditConsumed, readOnly]);
 
   const uploadEditorResource = useCallback(async (targetMemoId: string, uploadFile: File, isImage: boolean) => {
-    const mimeType = resolveResourceUploadMimeType(uploadFile.name, uploadFile.type);
-    if (mimeType !== uploadFile.type) uploadFile = new File([uploadFile], uploadFile.name, { type: mimeType, lastModified: uploadFile.lastModified });
-    if (isImage && shouldUploadWithPicGo()) {
-      const instanceKey = editorInstanceMemoIdentityRef.current.instanceKey;
-      const external = await uploadImageWithPicGo(uploadFile, {
+    const instanceKey = editorInstanceMemoIdentityRef.current.instanceKey;
+    return uploadEditorResourceFile({
+      repository,
+      memoId: targetMemoId,
+      file: uploadFile,
+      isImage,
+      picGoCopy: {
         title: t("settings.picgo.failedTitle"), message: t("settings.picgo.failedMessage"),
         retry: t("settings.picgo.retry"), fallback: t("settings.picgo.fallback"), cancel: t("settings.picgo.cancel"),
-      });
-      // PicGo or its failure dialog may outlive the original note/instance.
-      if (memoRef.current?.id !== targetMemoId || editorInstanceMemoIdentityRef.current.instanceKey !== instanceKey) {
-        throw new Error("The active note changed during image upload");
-      }
-      if (external) return external;
-    }
-    try {
-      const resource = (await repository.uploadMemoResource(targetMemoId, uploadFile)).resource;
-      return { ...resource, url: toDesktopResourceUrl(resource.url) };
-    } catch (error) {
-      if (!isDesktopResourceRuntime()) throw error;
-      const listed = await repository.listResources().catch(() => ({ resources: [] as Array<{ memoId?: string; url: string; filename?: string | null; kind?: string | null; mimeType?: string | null; byteSize?: number }> }));
-      const existing = findMatchingMemoResource(
-        listed.resources.filter((item) => item.memoId === targetMemoId),
-        uploadFile.name,
-        isImage ? "image" : "attachment",
-      );
-      if (existing) {
-        return {
-          kind: isImage ? "image" as const : "attachment" as const,
-          filename: existing.filename || uploadFile.name,
-          mimeType: existing.mimeType || uploadFile.type || null,
-          byteSize: existing.byteSize ?? uploadFile.size,
-          url: toDesktopResourceUrl(existing.url),
-        };
-      }
-      const staged = await stageDesktopResource(targetMemoId, uploadFile);
-      if (!staged) throw error;
-      return {
-        kind: isImage ? "image" as const : "attachment" as const,
-        filename: uploadFile.name,
-        mimeType: uploadFile.type || null,
-        byteSize: uploadFile.size,
-        url: `edgeever-staged://${staged.id}`,
-      };
-    }
+      },
+      isTargetCurrent: () => memoRef.current?.id === targetMemoId
+        && editorInstanceMemoIdentityRef.current.instanceKey === instanceKey,
+    });
   }, [repository, t]);
 
   const insertResourceFiles = useCallback((files: File[]) => {
