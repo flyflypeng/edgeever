@@ -14,6 +14,7 @@ const {
   listLocalTemplates,
   listLocalTags,
   listLocalMemos,
+  listLocalMemoActivity,
   putLocalTemplate,
   putLocalMemo,
   putLocalMemoUpdate,
@@ -243,6 +244,63 @@ describe("local mirror", () => {
 
     expect(result.totalCount).toBe(1);
     expect(result.memos.map((memo) => memo.id)).toEqual([expected.id]);
+  });
+
+  test("filters local memos by an inclusive start and exclusive end creation time", async () => {
+    const scope = createLocalDataScope("https://demo.edgeever.org", "user-1");
+    await createLocalMemo(scope, { notebookId: "nb-inbox", title: "Before", createdAt: "2026-09-30T23:59:59.999Z" });
+    const atStart = await createLocalMemo(scope, { notebookId: "nb-inbox", title: "At start", createdAt: "2026-10-01T00:00:00.000Z" });
+    const inside = await createLocalMemo(scope, { notebookId: "nb-inbox", title: "Inside", createdAt: "2026-10-01T12:00:00.000Z" });
+    await createLocalMemo(scope, { notebookId: "nb-inbox", title: "At end", createdAt: "2026-10-02T00:00:00.000Z" });
+
+    const result = await listLocalMemos(scope, {
+      notebookId: "nb-inbox",
+      sort: "created-desc",
+      createdFrom: "2026-10-01T00:00:00.000Z",
+      createdTo: "2026-10-02T00:00:00.000Z",
+    });
+
+    expect(result.totalCount).toBe(2);
+    expect(result.memos.map((memo) => memo.id)).toEqual([inside.id, atStart.id]);
+  });
+
+  test("keeps pinned memos in their natural position when pinnedFirst is false", async () => {
+    const scope = createLocalDataScope("https://demo.edgeever.org", "user-1");
+    const pinned = await createLocalMemo(scope, { notebookId: "nb-inbox", title: "B pinned", updatedAt: "2026-10-01T00:00:00.000Z" });
+    await putLocalMemo(scope, { ...pinned, isPinned: true });
+    const newer = await createLocalMemo(scope, { notebookId: "nb-inbox", title: "A newer", updatedAt: "2026-10-02T00:00:00.000Z" });
+
+    expect((await listLocalMemos(scope, {})).memos.map((memo) => memo.id)).toEqual([pinned.id, newer.id]);
+    expect((await listLocalMemos(scope, { pinnedFirst: false })).memos.map((memo) => memo.id)).toEqual([newer.id, pinned.id]);
+    expect((await listLocalMemos(scope, { sort: "title-asc", pinnedFirst: false })).memos.map((memo) => memo.id)).toEqual([newer.id, pinned.id]);
+  });
+
+  test("includes content Markdown only when withContent is requested", async () => {
+    const scope = createLocalDataScope("https://demo.edgeever.org", "user-1");
+    await createLocalMemo(scope, { notebookId: "nb-inbox", contentMarkdown: "Jot **body**" });
+
+    const plain = await listLocalMemos(scope, {});
+    const withContent = await listLocalMemos(scope, { withContent: true });
+
+    expect("contentMarkdown" in plain.memos[0]).toBe(false);
+    expect(withContent.memos[0]?.contentMarkdown).toBe("Jot **body**");
+  });
+
+  test("lists live memo activity of exactly one notebook, newest first", async () => {
+    const scope = createLocalDataScope("https://demo.edgeever.org", "user-1");
+    const older = await createLocalMemo(scope, { notebookId: "nb-inbox", tags: ["idea"], createdAt: "2026-10-01T00:00:00.000Z" });
+    const newer = await createLocalMemo(scope, { notebookId: "nb-inbox", createdAt: "2026-10-03T00:00:00.000Z" });
+    const deleted = await createLocalMemo(scope, { notebookId: "nb-inbox", createdAt: "2026-10-04T00:00:00.000Z" });
+    await putLocalMemo(scope, { ...deleted, isDeleted: true, deletedAt: "2026-10-05T00:00:00.000Z" });
+    const child = await createLocalMemo(scope, { notebookId: "nb-child", createdAt: "2026-10-02T00:00:00.000Z" });
+
+    expect(await listLocalMemoActivity(scope, { notebookId: "nb-inbox" })).toEqual({
+      memos: [
+        { id: newer.id, createdAt: "2026-10-03T00:00:00.000Z", tags: [] },
+        { id: older.id, createdAt: "2026-10-01T00:00:00.000Z", tags: ["idea"] },
+      ],
+    });
+    expect((await listLocalMemoActivity(scope, {})).memos.map((memo) => memo.id)).toEqual([newer.id, child.id, older.id]);
   });
 
   test("updates local content and preserves the memo identity", async () => {

@@ -298,13 +298,20 @@ export const createDesktopRepository = (): EdgeEverRepository => ({
     return { memo: await repairDisplayedMemo((await request("memo.get", { memoId: result.memo.id, includeDeleted: false })).memo) };
   },
 
-  listMemos: (params) => {
+  listMemos: async (params) => {
     const rpcParams: DesktopMemoListParams = {
       ...params,
       notebookId: params.notebookIds?.length ? null : (params.notebookId ?? null),
     };
-    return request("memo.list", rpcParams);
+    const result = await request("memo.list", rpcParams);
+    if (!params.withContent) return result;
+    return {
+      ...result,
+      memos: result.memos.map((memo) => ({ ...memo, contentMarkdown: mapMarkdownResourceUrls(memo.contentMarkdown, toDesktopResourceUrl) })),
+    };
   },
+
+  listMemoActivity: (params) => request("memo.activity", { notebookId: params.notebookId ?? null }),
 
   getMemo: async (memoId, includeDeleted = false) => {
     const result = await request("memo.get", { memoId, includeDeleted });

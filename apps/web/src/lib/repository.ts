@@ -1,11 +1,12 @@
 import { assertLocalMemoSnapshot } from "./local-memo-guard";
 import { localizeDefaultMemoTemplate } from "@edgeever/shared/memo-template-seeds";
-import { markdownToDoc, type MemoDetail, type MemoRevision, type MemoTemplate, type Notebook, type Resource, type ResourceListItem, type ResourceStorageSummary, type TagSummary, type TiptapDoc } from "@edgeever/shared";
+import { markdownToDoc, type MemoActivityResponse, type MemoDetail, type MemoRevision, type MemoTemplate, type Notebook, type Resource, type ResourceListItem, type ResourceStorageSummary, type TagSummary, type TiptapDoc } from "@edgeever/shared";
 import { api } from "@/lib/api";
 import {
   getLocalMemo,
   hasLocalMirrorData,
   isLocalMirrorInitialized,
+  listLocalMemoActivity,
   listLocalMemos,
   listLocalNotebooks,
   listLocalTemplates,
@@ -40,6 +41,7 @@ import {
   putLocalMemoUpdate,
   restoreLocalMemo,
   syncLocalMirror,
+  type LocalMemoActivityParams,
   type LocalMemoListParams,
   type LocalMemoListResponse,
 } from "@/lib/local-mirror";
@@ -85,6 +87,8 @@ export type EdgeEverRepository = {
    */
   duplicateMemo(memoId: string, input?: { notebookId?: string; title?: string }): Promise<{ memo: MemoDetail }>;
   listMemos(params: LocalMemoListParams): Promise<LocalMemoListResponse>;
+  /** Created-at and tags of live notes in exactly one notebook (or the whole workspace when omitted). */
+  listMemoActivity(params: LocalMemoActivityParams): Promise<MemoActivityResponse>;
   getMemo(memoId: string, includeDeleted?: boolean): Promise<{ memo: MemoDetail }>;
   createMemo(input: { notebookId: string; title?: string; contentJson?: TiptapDoc; contentMarkdown?: string; tags?: string[] }): Promise<{ memo: MemoDetail }>;
   updateMemo(memo: MemoDetail, input: Omit<MemoUpdateSyncPayload, "memoId">, options?: { guardLocalSnapshot?: boolean }): Promise<{ memo: MemoDetail; queued: true }>;
@@ -479,8 +483,19 @@ export const createWebRepository = (scope: string): EdgeEverRepository => {
       sort: params.sort,
       cursor: params.offset ? String(params.offset) : null,
       limit: params.limit,
+      createdFrom: params.createdFrom,
+      createdTo: params.createdTo,
+      pinnedFirst: params.pinnedFirst,
+      withContent: params.withContent,
     });
     return remote;
+  },
+
+  async listMemoActivity(params) {
+    if (await isLocalMirrorInitialized(scope) || await hasLocalMirrorData(scope)) {
+      return listLocalMemoActivity(scope, params);
+    }
+    return api.listMemoActivity({ notebookId: params.notebookId ?? null });
   },
 
   async getMemo(memoId, includeDeleted = false) {

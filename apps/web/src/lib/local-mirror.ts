@@ -13,6 +13,7 @@ import {
   getNotebookDescendantIds,
   resolveMemoContentDoc,
   resolveMergedMemoTitle,
+  type MemoActivityResponse,
   type MemoDetail,
   type MemoRevision,
   type MemoSummary,
@@ -42,7 +43,21 @@ export type LocalMemoListParams = {
   filter?: MemoFilterMode;
   limit?: number;
   offset?: number;
+  /** Inclusive ISO lower bound on created_at. */
+  createdFrom?: string;
+  /** Exclusive ISO upper bound on created_at. */
+  createdTo?: string;
+  /** Defaults to true; false keeps pinned notes in their natural sort position. */
+  pinnedFirst?: boolean;
+  /** Includes contentMarkdown in every summary. */
+  withContent?: boolean;
 };
+
+export type LocalMemoActivityParams = {
+  notebookId?: string | null;
+};
+
+const MEMO_ACTIVITY_LIMIT = 20000;
 
 export type LocalMemoListResponse = {
   memos: MemoSummary[];
@@ -74,7 +89,7 @@ const setMeta = async (scope: string, key: string, value: string) => {
   await localDb.syncMeta.put({ scope, key, value, updatedAt: new Date().toISOString() });
 };
 
-const toSummary = (memo: MemoDetail): MemoSummary => ({
+const toSummary = (memo: MemoDetail, withContent = false): MemoSummary => ({
   id: memo.id,
   notebookId: memo.notebookId,
   title: memo.title,
@@ -91,6 +106,7 @@ const toSummary = (memo: MemoDetail): MemoSummary => ({
   createdAt: memo.createdAt,
   updatedAt: memo.updatedAt,
   deletedAt: memo.deletedAt,
+  ...(withContent ? { contentMarkdown: memo.contentMarkdown } : {}),
 });
 
 const replaceScope = async (scope: string, notebooks: Notebook[], memos: MemoDetail[]) => {
@@ -250,9 +266,13 @@ export const listLocalMemos = async (scope: string, params: LocalMemoListParams)
   const q = params.q?.trim().toLocaleLowerCase();
   const tag = params.tag?.trim().toLocaleLowerCase();
 
+  const pinnedFirst = params.pinnedFirst !== false;
+
   memos = memos.filter((memo) => {
     if (memo.isDeleted !== Boolean(params.trash)) return false;
     if (notebookIds?.length && !notebookIds.includes(memo.notebookId)) return false;
+    if (params.createdFrom && memo.createdAt < params.createdFrom) return false;
+    if (params.createdTo && memo.createdAt >= params.createdTo) return false;
     if (tag && !memo.tags.some((memoTag) => memoTag.toLocaleLowerCase() === tag)) return false;
     if (params.filter === "tagged" && memo.tags.length === 0) return false;
     if (params.filter === "untagged" && memo.tags.length > 0) return false;
@@ -269,17 +289,27 @@ export const listLocalMemos = async (scope: string, params: LocalMemoListParams)
       if (titleCompare !== 0) return params.sort === "title-desc" ? -titleCompare : titleCompare;
       return right.updatedAt.localeCompare(left.updatedAt);
     }
-    return Number(right.isPinned) - Number(left.isPinned) || right.updatedAt.localeCompare(left.updatedAt) || right.id.localeCompare(left.id);
+    const pinnedCompare = pinnedFirst ? Number(right.isPinned) - Number(left.isPinned) : 0;
+    return pinnedCompare || right.updatedAt.localeCompare(left.updatedAt) || right.id.localeCompare(left.id);
   });
 
   const totalCount = memos.length;
   const offset = Math.max(0, params.offset ?? 0);
   const page = memos.slice(offset, offset + (params.limit ?? 50));
   return {
-    memos: page.map(toSummary),
+    memos: page.map((memo) => toSummary(memo, Boolean(params.withContent))),
     totalCount,
     nextCursor: offset + page.length < totalCount ? String(offset + page.length) : null,
   };
+};
+
+/** Lightweight created-at and tag data for the jot heatmap and tag list. */
+export const listLocalMemoActivity = async (scope: string, params: LocalMemoActivityParams): Promise<MemoActivityResponse> => {
+  const memos = (await localDb.memos.where("scope").equals(scope).toArray())
+    .filter((memo) => !memo.isDeleted && (!params.notebookId || memo.notebookId === params.notebookId))
+    .sort((left, right) => right.createdAt.localeCompare(left.createdAt) || right.id.localeCompare(left.id))
+    .slice(0, MEMO_ACTIVITY_LIMIT);
+  return { memos: memos.map((memo) => ({ id: memo.id, createdAt: memo.createdAt, tags: memo.tags })) };
 };
 
 export const getLocalMemo = async (scope: string, memoId: string) => {

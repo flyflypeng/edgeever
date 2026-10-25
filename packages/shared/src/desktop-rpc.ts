@@ -1,4 +1,4 @@
-import type { MemoDetail, MemoSummary, MemoTemplate, Notebook, ResourceListItem, ResourceStorageSummary } from "./types";
+import type { MemoActivityResponse, MemoDetail, MemoSummary, MemoTemplate, Notebook, ResourceListItem, ResourceStorageSummary } from "./types";
 import type { TiptapDoc } from "./content";
 
 export const DESKTOP_SIDECAR_PROTOCOL_VERSION = 2;
@@ -47,6 +47,7 @@ export const DESKTOP_RPC_METHODS = [
   "memo.pinBatch",
   "memo.merge",
   "memo.list",
+  "memo.activity",
   "memo.get",
   "memo.create",
   "memo.update",
@@ -70,6 +71,14 @@ export type DesktopMemoListParams = {
   filter?: "all" | "pinned" | "tagged" | "untagged";
   limit?: number;
   offset?: number;
+  /** Inclusive ISO lower bound on created_at. */
+  createdFrom?: string;
+  /** Exclusive ISO upper bound on created_at. */
+  createdTo?: string;
+  /** Defaults to true; false keeps pinned notes in their natural sort position. */
+  pinnedFirst?: boolean;
+  /** Includes contentMarkdown in every summary. */
+  withContent?: boolean;
 };
 
 export type DesktopMemoCreateParams = {
@@ -114,6 +123,7 @@ export type DesktopRpcResponses = {
   "memo.pinBatch": { ok: true; updated: number };
   "memo.merge": { memo: MemoDetail };
   "memo.list": { memos: MemoSummary[]; totalCount: number; nextCursor: string | null };
+  "memo.activity": MemoActivityResponse;
   "memo.get": { memo: MemoDetail };
   "memo.create": { memo: MemoDetail };
   "memo.update": { memo: MemoDetail };
@@ -163,6 +173,7 @@ export type DesktopRpcParams = {
   "memo.pinBatch": { memoIds: string[]; isPinned: boolean };
   "memo.merge": { memoIds: string[]; notebookId?: string; title?: string };
   "memo.list": DesktopMemoListParams;
+  "memo.activity": { notebookId?: string | null };
   "memo.get": { memoId: string; includeDeleted?: boolean };
   "memo.create": DesktopMemoCreateParams;
   "memo.update": DesktopMemoUpdateParams;

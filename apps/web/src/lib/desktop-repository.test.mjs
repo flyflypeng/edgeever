@@ -52,6 +52,16 @@ globalThis.window = {
       if (method === "memo.update" || method === "memo.updateGuarded") {
         return { memo: { ...params, id: params.memoId, contentHash: "next-hash" } };
       }
+      if (method === "memo.list" && params.withContent) {
+        return {
+          memos: [{ id: "memo_jot", contentMarkdown: "![shot](/api/v1/resources/res_shot/blob)" }],
+          totalCount: 1,
+          nextCursor: null,
+        };
+      }
+      if (method === "memo.activity") {
+        return { memos: [{ id: "memo_jot", createdAt: "2026-10-01T00:00:00.000Z", tags: ["idea"] }] };
+      }
       return { memos: [], totalCount: 0, nextCursor: null };
     },
   },
@@ -93,6 +103,44 @@ describe("desktop repository notebook filters", () => {
         tag: "AI-RSS",
       },
     });
+  });
+
+  test("forwards jot list parameters and maps content resource URLs", async () => {
+    const result = await createDesktopRepository().listMemos({
+      notebookId: "inbox",
+      sort: "created-desc",
+      createdFrom: "2026-10-01T00:00:00.000Z",
+      createdTo: "2026-10-02T00:00:00.000Z",
+      pinnedFirst: false,
+      withContent: true,
+      limit: 20,
+      offset: 0,
+    });
+
+    expect(lastRequest).toEqual({
+      method: "memo.list",
+      params: {
+        notebookId: "inbox",
+        sort: "created-desc",
+        createdFrom: "2026-10-01T00:00:00.000Z",
+        createdTo: "2026-10-02T00:00:00.000Z",
+        pinnedFirst: false,
+        withContent: true,
+        limit: 20,
+        offset: 0,
+      },
+    });
+    expect(result.memos[0].contentMarkdown).toBe("![shot](edgeever-resource://resource/res_shot)");
+  });
+
+  test("requests memo activity through the sidecar", async () => {
+    const result = await createDesktopRepository().listMemoActivity({ notebookId: "inbox" });
+
+    expect(lastRequest).toEqual({ method: "memo.activity", params: { notebookId: "inbox" } });
+    expect(result.memos).toEqual([{ id: "memo_jot", createdAt: "2026-10-01T00:00:00.000Z", tags: ["idea"] }]);
+
+    await createDesktopRepository().listMemoActivity({});
+    expect(lastRequest).toEqual({ method: "memo.activity", params: { notebookId: null } });
   });
 });
 
