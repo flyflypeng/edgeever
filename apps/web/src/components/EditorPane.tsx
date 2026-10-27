@@ -145,6 +145,8 @@ import {
   wrapDetailsContentHtml,
   isPdfAttachment,
   resolveMemoContentDoc,
+  deriveMemoTitleFromMarkdown,
+  isUntitledMemoTitle,
   type Notebook,
   type ResolvedNoteProse,
   type MemoDetail,
@@ -691,6 +693,11 @@ const RichEditorPane = ({
   const headingShortcutSurfaceRef = useRef({ markdown: false, plainText: false });
   const editorCanvasInteractionVersionRef = useRef(0);
   const persistResourceInsertionDraftRef = useRef<() => Promise<unknown>>(() => Promise.resolve());
+  // Body of the open note when it was opened, and the note last saved from this
+  // editor. Together they tell whether the body was edited while open.
+  const openedBodyRef = useRef<{ memoId: string; markdown: string } | null>(null);
+  const savedBodyMemoIdRef = useRef<string | null>(null);
+  const commitDerivedTitleOnLeaveRef = useRef<() => void>(() => undefined);
   const openAiAssistantRef = useRef<() => void>(() => undefined);
   const aiSpaceShortcutEnabledRef = useRef(readAiSpaceShortcutPreference());
   const editorScrollContainerRef = useRef<HTMLDivElement | null>(null);
@@ -858,6 +865,8 @@ const RichEditorPane = ({
         ? { ...fields, memoId: nextMemoId }
         : fields);
       if (editingMemoIdRef.current === previousMemoId) editingMemoIdRef.current = nextMemoId;
+      if (openedBodyRef.current?.memoId === previousMemoId) openedBodyRef.current = { ...openedBodyRef.current, memoId: nextMemoId };
+      if (savedBodyMemoIdRef.current === previousMemoId) savedBodyMemoIdRef.current = nextMemoId;
       if (hydratedMemoIdRef.current === previousMemoId) {
         hydratedMemoIdRef.current = nextMemoId;
         setHydratedEditorMemoId(nextMemoId);
@@ -2300,7 +2309,7 @@ const RichEditorPane = ({
     return countMemoCharacters(contentJson);
   }, [dirtyVersion, editorContentVersion, getCurrentContentJson, memo]);
 
-  const currentSnapshot = useCallback(() => {
+  const currentSnapshot = useCallback((snapshotTitle = title) => {
     const contentJson = getCurrentContentJson();
     if (!contentJson) {
       return null;
@@ -2308,11 +2317,79 @@ const RichEditorPane = ({
 
     return JSON.stringify({
       memoId: fieldsMemoId,
-      title,
+      title: snapshotTitle,
       tagsText,
       contentJson,
     });
   }, [fieldsMemoId, getCurrentContentJson, tagsText, title]);
+
+  /**
+   * First line of the body for an untitled note whose body was edited while
+   * open; null when the note keeps its current title.
+   */
+  const resolveDerivedTitleToCommit = () => {
+    const currentMemo = memoRef.current;
+    const fields = getWritableEditorMemoFields(
+      memoFieldsRef.current,
+      currentMemo?.id ?? null,
+      hydratedMemoIdRef.current,
+      hydratingRef.current,
+    );
+    if (!currentMemo || currentMemo.isDeleted || readOnly || saveState === "conflict" || !fields ||
+      !isUntitledMemoTitle(fields.title) || openedBodyRef.current?.memoId !== currentMemo.id ||
+      (!hasUnsavedChangesRef.current && savedBodyMemoIdRef.current !== currentMemo.id)) {
+      return null;
+    }
+    const contentJson = getCurrentContentJson();
+    if (!contentJson) return null;
+    const markdown = docToMarkdown(contentJson);
+    return markdown === openedBodyRef.current.markdown ? null : deriveMemoTitleFromMarkdown(markdown);
+  };
+
+  /** Puts the derived title in the title field and returns it for the save. */
+  const applyDerivedTitle = () => {
+    const derivedTitle = resolveDerivedTitleToCommit();
+    if (!derivedTitle) return null;
+    const memoId = memoFieldsRef.current.memoId;
+    memoFieldsRef.current = { ...memoFieldsRef.current, title: derivedTitle };
+    setMemoFields((fields) => fields.memoId === memoId ? { ...fields, title: derivedTitle } : fields);
+    return derivedTitle;
+  };
+
+  /**
+   * Runs while the editor still shows the note being left. The save carries
+   * the current body as well, so unsaved edits are written with the title.
+   */
+  const commitDerivedTitleOnLeave = () => {
+    const derivedTitle = resolveDerivedTitleToCommit();
+    const currentMemo = memoRef.current;
+    const editSession = editSessionRef.current;
+    const contentJson = getCurrentContentJson();
+    if (!derivedTitle || !currentMemo || !contentJson || editSession?.memoId !== currentMemo.id) return;
+    if (useMarkdownSourceEditor &&
+      analyzeMarkdownModeContent(markdownModeSnapshotRef.current, currentMemo.id, markdownSource).hasUnsafeRichTableEdit) {
+      return;
+    }
+    void repository.updateMemo(currentMemo, {
+      expectedRevision: currentMemo.revision,
+      expectedContentHash: currentMemo.contentHash,
+      editSessionId: editSession.id,
+      title: derivedTitle,
+      contentJson,
+      contentMarkdown: useMarkdownSourceEditor ? markdownSource : undefined,
+      tags: parseTagsText(memoFieldsRef.current.tagsText),
+    }).then(async ({ memo: savedMemo }) => {
+      removeEmergencyDraft(savedMemo.id);
+      // The draft holds this body with the empty title; reopening must not restore it.
+      await localDb.drafts.delete(savedMemo.id).catch(() => undefined);
+      await onSaved(savedMemo);
+    }).catch((error: unknown) => {
+      // The local draft still holds any unsaved edits; reopening the note saves them.
+      console.error("[editor] Failed to save the derived title", error);
+    });
+  };
+  commitDerivedTitleOnLeaveRef.current = commitDerivedTitleOnLeave;
+  useEffect(() => () => commitDerivedTitleOnLeaveRef.current(), []);
 
   useEffect(() => {
     const handleLocalDatabaseInterrupted = () => {
@@ -2344,6 +2421,8 @@ const RichEditorPane = ({
     let cancelled = false;
 
     if (!memo) {
+      if (memoRef.current) commitDerivedTitleOnLeave();
+      openedBodyRef.current = null;
       memoRef.current = null;
       editSessionRef.current = null;
       hydratedMemoIdRef.current = null;
@@ -2368,6 +2447,11 @@ const RichEditorPane = ({
     const sameMemo = editingMemoIdRef.current === memo.id;
 
     if (!sameMemo) {
+      if (previousMemo) commitDerivedTitleOnLeave();
+      openedBodyRef.current = {
+        memoId: memo.id,
+        markdown: docToMarkdown(normalizeImageGalleries(resolveMemoContentDoc(memo.contentJson, memo.contentMarkdown))),
+      };
       hydratedMemoIdRef.current = null;
       editSessionRef.current = null;
       appliedEditorSourceKeyRef.current = null;
@@ -2913,7 +2997,8 @@ const RichEditorPane = ({
   }, [getMobilePlainTextValue, persistCurrentDraft, tagsText, title]);
 
   const saveMutation = useMutation({
-    mutationFn: async () => {
+    // A title derived on leave/save is passed in: the field state has not re-rendered yet.
+    mutationFn: async (titleOverride?: string) => {
       const currentMemo = memoRef.current;
       if (useMarkdownSourceEditor && analyzeMarkdownModeContent(
         markdownModeSnapshotRef.current,
@@ -2941,7 +3026,7 @@ const RichEditorPane = ({
         throw new Error("Deleted memos are read-only");
       }
 
-      const snapshot = currentSnapshot();
+      const snapshot = currentSnapshot(titleOverride ?? writableFields.title);
       if (!snapshot) {
         throw new Error("Editor is not ready");
       }
@@ -2951,7 +3036,7 @@ const RichEditorPane = ({
         expectedRevision: currentMemo.revision,
         expectedContentHash: currentMemo.contentHash,
         editSessionId: editSession.id,
-        title: writableFields.title,
+        title: titleOverride ?? writableFields.title,
         contentJson,
         contentMarkdown: useMarkdownSourceEditor ? markdownSource : undefined,
         tags: parseTagsText(writableFields.tagsText),
@@ -2959,11 +3044,12 @@ const RichEditorPane = ({
       persistEmergencyDraft({
         memoId: currentMemo.id,
         expectedRevision: currentMemo.revision,
-        title: writableFields.title,
+        title: titleOverride ?? writableFields.title,
         tagsText: writableFields.tagsText,
         contentJson,
         updatedAt: new Date().toISOString(),
       });
+      savedBodyMemoIdRef.current = currentMemo.id;
       const { memo: localMemo } = await repository.updateMemo(currentMemo, payload);
       return { memo: localMemo, snapshot, queued: true };
     },
@@ -3213,9 +3299,10 @@ const RichEditorPane = ({
 
     void (async () => {
       try {
+        const derivedTitle = applyDerivedTitle();
         await saveAndSyncEditor({
-          hasUnsavedChanges: hasUnsavedChangesRef.current,
-          save: mutateSaveAsync,
+          hasUnsavedChanges: hasUnsavedChangesRef.current || Boolean(derivedTitle),
+          save: () => mutateSaveAsync(derivedTitle ?? undefined),
           sync: onSyncRequested,
         });
       } catch {
@@ -3794,13 +3881,14 @@ const RichEditorPane = ({
   };
 
   const handleMobileBack = () => {
-    if (readOnly || !editor || !hasUnsavedChanges) {
+    const derivedTitle = readOnly || !editor ? null : applyDerivedTitle();
+    if (readOnly || !editor || (!hasUnsavedChanges && !derivedTitle)) {
       onMobileDefaultEditConsumed();
       onBackToList();
       return;
     }
 
-    saveMutation.mutate(undefined, {
+    saveMutation.mutate(derivedTitle ?? undefined, {
       onSuccess: () => {
         onMobileDefaultEditConsumed();
         onBackToList();
@@ -3815,14 +3903,15 @@ const RichEditorPane = ({
   };
 
   const handleMobileDone = () => {
-    if (readOnly || !editor || !hasUnsavedChanges) {
+    const derivedTitle = readOnly || !editor ? null : applyDerivedTitle();
+    if (readOnly || !editor || (!hasUnsavedChanges && !derivedTitle)) {
       onMobileDefaultEditConsumed();
       setIsMobileEditing(false);
       setMobileToolbarOpen(false);
       return;
     }
 
-    saveMutation.mutate(undefined, {
+    saveMutation.mutate(derivedTitle ?? undefined, {
       onSuccess: () => {
         onMobileDefaultEditConsumed();
         setIsMobileEditing(false);

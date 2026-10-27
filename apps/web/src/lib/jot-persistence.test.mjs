@@ -87,7 +87,7 @@ describe("submitJotCapture", () => {
     });
 
     expect(calls.create).toHaveLength(1);
-    expect(calls.create[0]).toMatchObject({ notebookId: "inbox", contentMarkdown: "Hello **jot**", tags: ["idea"] });
+    expect(calls.create[0]).toMatchObject({ notebookId: "inbox", title: "Hello jot", contentMarkdown: "Hello **jot**", tags: ["idea"] });
     expect(calls.create[0].contentJson).toEqual(markdownToDoc("Hello **jot**"));
     expect(calls.update).toHaveLength(0);
     expect(calls.upload).toHaveLength(0);
@@ -112,7 +112,7 @@ describe("submitJotCapture", () => {
     expect(calls.update).toHaveLength(1);
     const saved = calls.update[0].input;
     expect(saved.contentMarkdown).toBe("Look\n\n![photo.png](/api/v1/resources/res_1/blob)\n\n[brief.pdf](/api/v1/resources/res_2/blob)");
-    expect(saved).toMatchObject({ expectedRevision: 1, expectedContentHash: "hash-memo_1", tags: ["trip"] });
+    expect(saved).toMatchObject({ expectedRevision: 1, expectedContentHash: "hash-memo_1", title: "Look", tags: ["trip"] });
     expect(saved.contentJson).toEqual(markdownToDoc(saved.contentMarkdown));
     expect(memo.contentMarkdown).toBe(saved.contentMarkdown);
     expect(calls.delete).toHaveLength(0);
@@ -201,5 +201,21 @@ describe("submitJotEdit", () => {
     expect(calls.upload.map((call) => call.memoId)).toEqual(["memo_plain"]);
     expect(calls.update[0].input.contentMarkdown).toBe("After\n\n![shot.png](/api/v1/resources/res_1/blob)");
     expect(calls.update[0].input.contentJson).toEqual(markdownToDoc("After\n\n![shot.png](/api/v1/resources/res_1/blob)"));
+  });
+
+  test("follows the new first line unless the user typed a title", async () => {
+    const cases = [
+      { title: null, expected: "After" },
+      { title: "无标题笔记", expected: "After" },
+      { title: "Before", expected: "After" },
+      { title: "手动标题", expected: "手动标题" },
+    ];
+    for (const { title, expected } of cases) {
+      const { repository, calls } = createRepository();
+      await submitJotEdit({
+        repository, memo: memoFrom("memo_plain", "Before\nBody", { title }), markdown: "After\nBody", tags: [], pendingFiles: [], imageCompressionEnabled: false,
+      });
+      expect(calls.update[0].input.title).toBe(expected);
+    }
   });
 });

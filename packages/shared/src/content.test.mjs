@@ -18,7 +18,46 @@ import {
   resolveMemoContentDoc,
   resolveMemoContentMarkdown,
   resolveMergedMemoTitle,
+  deriveMemoTitleFromMarkdown,
+  isUntitledMemoTitle,
 } from "./content.ts";
+
+describe("derived memo title", () => {
+  test("uses the first line with words and strips Markdown syntax", () => {
+    expect(deriveMemoTitleFromMarkdown("今天天气怎么样?\n第二行")).toBe("今天天气怎么样?");
+    expect(deriveMemoTitleFromMarkdown("\n\n# **会议** 记录\n正文")).toBe("会议 记录");
+    expect(deriveMemoTitleFromMarkdown("- [ ] 买 `牛奶`\n- [x] 其他")).toBe("买 牛奶");
+    expect(deriveMemoTitleFromMarkdown("> 1. 引用里的[链接](https://example.com)")).toBe("引用里的链接");
+  });
+
+  test("skips lines without words: images, attachments, fences, front matter, table separators", () => {
+    expect(deriveMemoTitleFromMarkdown("![shot.png](/api/v1/resources/r1/blob)\n\n配图说明")).toBe("配图说明");
+    expect(deriveMemoTitleFromMarkdown("[report.pdf](/api/v1/resources/r2/blob)\n附件说明")).toBe("附件说明");
+    expect(deriveMemoTitleFromMarkdown("```js\nconst a = 1;\n```\n代码之后")).toBe("代码之后");
+    expect(deriveMemoTitleFromMarkdown("---\nstatus: draft\n---\n属性之后")).toBe("属性之后");
+    expect(deriveMemoTitleFromMarkdown("| 名称 | 状态 |\n| --- | --- |")).toBe("名称 状态");
+    expect(deriveMemoTitleFromMarkdown("---\n\n- [ ]\n分隔之后")).toBe("分隔之后");
+  });
+
+  test("caps the title at 30 characters without splitting surrogate pairs", () => {
+    const long = "一二三四五六七八九十".repeat(4);
+    expect(deriveMemoTitleFromMarkdown(long)).toBe(`${long.slice(0, 30)}…`);
+    expect(deriveMemoTitleFromMarkdown("😀".repeat(31))).toBe(`${"😀".repeat(30)}…`);
+    expect(deriveMemoTitleFromMarkdown("a".repeat(30))).toBe("a".repeat(30));
+  });
+
+  test("returns null when the body has no words", () => {
+    expect(deriveMemoTitleFromMarkdown("")).toBeNull();
+    expect(deriveMemoTitleFromMarkdown("![](/api/v1/resources/r1/blob)\n\n```\ncode\n```")).toBeNull();
+  });
+
+  test("treats empty and placeholder titles as untitled", () => {
+    expect(isUntitledMemoTitle(null)).toBe(true);
+    expect(isUntitledMemoTitle("  ")).toBe(true);
+    expect(isUntitledMemoTitle(DEFAULT_MEMO_TITLE)).toBe(true);
+    expect(isUntitledMemoTitle("会议记录")).toBe(false);
+  });
+});
 
 describe("merged memo title", () => {
   test("prefers an explicit title, then the first custom source title", () => {

@@ -17,7 +17,7 @@ import {
   Workflow,
   type LucideIcon,
 } from "lucide-react";
-import type { MemoDetail, MemoSummary, Notebook } from "@edgeever/shared";
+import { isAutomaticMemoTitle, type MemoDetail, type MemoSummary, type Notebook } from "@edgeever/shared";
 import { JotEditor, type JotEditorSubmit } from "@/components/jot/JotEditor";
 import { JotCardContent } from "@/components/jot/JotCardContent";
 import { MobileMoveSheet } from "@/components/MemoListMobileSheets";
@@ -34,7 +34,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { getNotebookMoveOptions, isDefaultMemoTitle } from "@/lib/app-helpers";
+import { getNotebookMoveOptions } from "@/lib/app-helpers";
 import { stripJotLeadingTitle } from "@/lib/jot-markdown";
 import { getJotEditableMarkdown } from "@/lib/jot-persistence";
 import { cn } from "@/lib/utils";
@@ -137,7 +137,8 @@ export const JotCard = ({
   const [editingMemo, setEditingMemo] = useState<MemoDetail | null>(null);
   const [loadingEdit, setLoadingEdit] = useState(false);
   const [mobileMoveOpen, setMobileMoveOpen] = useState(false);
-  const title = memo.title && !isDefaultMemoTitle(memo.title) ? memo.title.trim() : "";
+  // A title derived from the first line would only repeat it; show the body alone.
+  const title = isAutomaticMemoTitle(memo.title, memo.contentMarkdown ?? memo.excerpt) ? "" : memo.title!.trim();
   const moveOptions = useMemo(
     () => getNotebookMoveOptions(notebooks).filter((option) => option.id !== inboxId),
     [inboxId, notebooks],

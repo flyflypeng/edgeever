@@ -103,6 +103,80 @@ export const resolveMergedMemoTitle = (
   return customTitle ?? `合并笔记 ${date.toLocaleDateString("zh-CN")}`;
 };
 
+export const DERIVED_MEMO_TITLE_MAX_LENGTH = 30;
+
+const MARKDOWN_FENCE_PATTERN = /^\s*(`{3,}|~{3,})/;
+const MARKDOWN_TABLE_SEPARATOR_PATTERN = /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/;
+const MARKDOWN_THEMATIC_BREAK_PATTERN = /^\s*([-*_])(\s*\1){2,}\s*$/;
+const MARKDOWN_BLOCK_PREFIX_PATTERN = /^\s*(#{1,6}(\s+|$)|>\s?|[-*+]\s+\[[ xX]\](\s+|$)|[-*+]\s+|\d+[.)]\s+)/;
+const MARKDOWN_RESOURCE_URL_PATTERN = /^(\/api\/v1\/resources\/|edgeever-jot-pending:)/;
+
+const markdownLineToTitleText = (line: string) => {
+  let text = line.replace(/<!--.*?-->/g, " ");
+  // Images and uploaded attachments carry no words of the note itself.
+  text = text.replace(/!\[[^\]]*\]\([^)]*\)/g, " ");
+  text = text.replace(/\[([^\]]*)\]\(([^)\s]*)[^)]*\)/g, (_match, label: string, url: string) =>
+    MARKDOWN_RESOURCE_URL_PATTERN.test(url) ? " " : label);
+  let previous: string;
+  do {
+    previous = text;
+    text = text.replace(MARKDOWN_BLOCK_PREFIX_PATTERN, "");
+  } while (text !== previous);
+  return text
+    .replace(/<\/?[a-zA-Z][^>]*>/g, " ")
+    .replace(/^\s*\||\|\s*$/g, "")
+    .replace(/\s*\|\s*/g, " ")
+    .replace(/(\*\*|__|~~|==|`)/g, "")
+    .replace(/\*(\S(?:[^*]*\S)?)\*/g, "$1")
+    .replace(/\\([\\`*_{}[\]()#+\-.!|>~])/g, "$1")
+    .replace(/\s+/g, " ")
+    .trim();
+};
+
+/**
+ * Title for a note that has none: the first line with words, without Markdown
+ * syntax, capped at {@link DERIVED_MEMO_TITLE_MAX_LENGTH} characters.
+ * Returns null when the body has no words (e.g. only images).
+ */
+export const deriveMemoTitleFromMarkdown = (markdown: string | null | undefined): string | null => {
+  if (!markdown) return null;
+  const body = splitMarkdownFrontMatter(markdown)?.body ?? markdown;
+  let fence: string | null = null;
+  for (const line of body.split(/\r\n?|\n/)) {
+    const fenceMatch = MARKDOWN_FENCE_PATTERN.exec(line);
+    if (fence) {
+      if (fenceMatch && fenceMatch[1]![0] === fence[0] && fenceMatch[1]!.length >= fence.length) fence = null;
+      continue;
+    }
+    if (fenceMatch) {
+      fence = fenceMatch[1]!;
+      continue;
+    }
+    if (MARKDOWN_TABLE_SEPARATOR_PATTERN.test(line) || MARKDOWN_THEMATIC_BREAK_PATTERN.test(line)) continue;
+    const text = markdownLineToTitleText(line);
+    if (!text) continue;
+    const characters = Array.from(text);
+    return characters.length > DERIVED_MEMO_TITLE_MAX_LENGTH
+      ? `${characters.slice(0, DERIVED_MEMO_TITLE_MAX_LENGTH).join("").trimEnd()}…`
+      : text;
+  }
+  return null;
+};
+
+/**
+ * True when the title is empty, the untitled placeholder, or exactly what
+ * {@link deriveMemoTitleFromMarkdown} produces for the body, i.e. the user
+ * has not typed a title of their own.
+ */
+export const isAutomaticMemoTitle = (title: string | null | undefined, markdown: string | null | undefined) =>
+  isUntitledMemoTitle(title) || title!.trim() === deriveMemoTitleFromMarkdown(markdown);
+
+/** True when the stored title is empty or the untitled placeholder. */
+export const isUntitledMemoTitle = (title: string | null | undefined) => {
+  const trimmed = title?.trim() ?? "";
+  return !trimmed || trimmed === DEFAULT_MEMO_TITLE;
+};
+
 export const emptyDoc = (): TiptapDoc => ({
   type: "doc",
   content: [{ type: "paragraph" }],

@@ -1,4 +1,6 @@
 import {
+  deriveMemoTitleFromMarkdown,
+  isAutomaticMemoTitle,
   markdownToDoc,
   resolveResourceUploadMimeType,
   SUPPORTED_IMAGE_MIME_TYPES,
@@ -17,6 +19,7 @@ import { processFileUploadBatch } from "@/lib/file-batch";
 import { compressImageForUpload } from "@/lib/image-compression";
 import { localDb } from "@/lib/local-db";
 import { resourceToMarkdown } from "@/lib/markdown-resource-paste";
+import { getJotDisplayMarkdown } from "@/lib/jot-markdown";
 import { isBrowserOffline } from "@/lib/network-status";
 import type { JotPendingFile } from "@/components/jot/JotEditor";
 import type { EdgeEverRepository } from "@/lib/repository";
@@ -45,6 +48,12 @@ const REMOTE_MEMO_WAIT_MS = 20_000;
 const REMOTE_MEMO_POLL_MS = 250;
 
 export const getJotEditableMarkdown = (memo: MemoDetail): string => docToEditableMarkdown(memo.contentJson);
+
+/** Keep a title the user typed; otherwise follow the first line of the new body. */
+const resolveJotEditTitle = (memo: MemoDetail, markdown: string) =>
+  isAutomaticMemoTitle(memo.title, getJotDisplayMarkdown(memo))
+    ? deriveMemoTitleFromMarkdown(markdown) ?? ""
+    : memo.title ?? "";
 
 const replacePendingReferences = (markdown: string, replace: (url: string) => string) =>
   markdown.replace(PENDING_REFERENCE_PATTERN, (_match, url: string) => replace(url));
@@ -143,7 +152,13 @@ export const submitJotCapture = async (input: {
   const files = referencedPendingFiles(markdown, input.pendingFiles);
   if (files.length === 0) {
     const contentMarkdown = stripPendingReferences(markdown).trim();
-    return (await repository.createMemo({ notebookId, contentJson: markdownToDoc(contentMarkdown), contentMarkdown, tags })).memo;
+    return (await repository.createMemo({
+      notebookId,
+      title: deriveMemoTitleFromMarkdown(contentMarkdown) ?? "",
+      contentJson: markdownToDoc(contentMarkdown),
+      contentMarkdown,
+      tags,
+    })).memo;
   }
 
   const resumeDesktopSync = await pauseDesktopSync();
@@ -151,6 +166,7 @@ export const submitJotCapture = async (input: {
     const draftMarkdown = stripPendingReferences(markdown);
     let created = (await repository.createMemo({
       notebookId,
+      title: deriveMemoTitleFromMarkdown(draftMarkdown) ?? "",
       contentJson: markdownToDoc(draftMarkdown),
       contentMarkdown: draftMarkdown,
       tags,
@@ -163,7 +179,7 @@ export const submitJotCapture = async (input: {
         expectedRevision: created.revision,
         expectedContentHash: created.contentHash,
         editSessionId: `jot:${created.id}`,
-        title: created.title ?? "",
+        title: deriveMemoTitleFromMarkdown(contentMarkdown) ?? "",
         contentJson: markdownToDoc(contentMarkdown),
         contentMarkdown,
         tags,
@@ -227,7 +243,7 @@ export const submitJotEdit = async (input: {
       expectedRevision: memo.revision,
       expectedContentHash: memo.contentHash,
       editSessionId: `jot:${memo.id}`,
-      title: memo.title ?? "",
+      title: resolveJotEditTitle(memo, markdown),
       contentJson: analysis.contentJson,
       contentMarkdown: markdown,
       tags,
