@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { createDefaultDiagramDocument, getDiagramSummary, serializeDiagramDocument } from "../packages/shared/src/diagram.ts";
 import { createDefaultInfographicDocument, getInfographicSummary, serializeInfographicDocument } from "../packages/shared/src/infographic.ts";
 import { createDefaultTableDocument, getTableSummary, serializeTableDocument } from "../packages/shared/src/table.ts";
+import { serializeArtifactDocument } from "../packages/shared/src/artifact.ts";
 
 const sidecarPath = process.env.EDGE_EVER_SIDECAR_PATH ?? join(process.cwd(), "crates/desktop-sidecar/target/debug/edgeever-sidecar");
 const migrationsPath = process.env.EDGE_EVER_MIGRATIONS_PATH ?? join(process.cwd(), "migrations");
@@ -536,6 +537,22 @@ assert.equal(artifactFolder.systemKind, null, "Artifact Folders are ordinary not
 await assert.rejects(request("notebook.delete", { notebookId: artifactLibrary.id }), /artifact_library_protected/);
 await request("notebook.delete", { notebookId: artifactFolder.id });
 assert.ok((await request("notebook.list")).notebooks.some((notebook) => notebook.id === artifactLibrary.id));
+
+// A trashed artifact whose folder was deleted offline restores to the library
+// root, as the server does; one whose folder still exists stays there.
+const artifactMarkdown = serializeArtifactDocument({
+  schemaVersion: 1, kind: "html", htmlResourceId: "res_artifact_html", originalFilename: "page.html", byteSize: 10,
+  sha256: "a".repeat(64), source: { type: "upload" },
+}, "page");
+const doomedFolder = (await request("notebook.create", { name: "Doomed", parentId: artifactLibrary.id })).notebook;
+const orphanArtifact = (await request("memo.create", { notebookId: doomedFolder.id, contentMarkdown: artifactMarkdown, tags: [] })).memo;
+const keptFolder = (await request("notebook.create", { name: "Kept", parentId: artifactLibrary.id })).notebook;
+const keptArtifact = (await request("memo.create", { notebookId: keptFolder.id, contentMarkdown: artifactMarkdown, tags: [] })).memo;
+await request("memo.deleteBatch", { memoIds: [orphanArtifact.id, keptArtifact.id] });
+await request("notebook.delete", { notebookId: doomedFolder.id });
+assert.equal((await request("memo.restore", { memoId: orphanArtifact.id })).memo.notebookId, artifactLibrary.id);
+assert.equal((await request("memo.get", { memoId: orphanArtifact.id })).memo.notebookId, artifactLibrary.id);
+assert.equal((await request("memo.restore", { memoId: keptArtifact.id })).memo.notebookId, keptFolder.id);
 
 // Reproduce the installed client's failed notebook acknowledgement with notes
 // and a child already referring to the placeholder.

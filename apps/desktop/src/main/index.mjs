@@ -34,7 +34,7 @@ import {
 } from "./installation-location.mjs";
 import { userDataDirectoryFromArguments } from "./user-data-directory.mjs";
 import { PRINT_PDF_OPTIONS } from "./print-pdf.mjs";
-import { isAllowedAppNavigation, isAllowedPrintPreviewUrl, isResourceDownloadUrl } from "./window-open-policy.mjs";
+import { frameNavigationDecision, isAllowedAppNavigation, isAllowedPrintPreviewUrl, isResourceDownloadUrl } from "./window-open-policy.mjs";
 import { showWindow } from "./window-visibility.mjs";
 import { formatGlobalShortcutForHumans, globalShortcutAccelerator, globalShortcutAcceleratorsConflict, normalizeGlobalShortcutBinding, parseStoredGlobalShortcuts, replaceGlobalShortcut, toggleMainWindow } from "./global-shortcut.mjs";
 import { trayIconPath } from "./tray-icon.mjs";
@@ -1693,6 +1693,24 @@ const createWindow = async ({ show = true } = {}) => {
     if (isResourceDownloadUrl(url)) mainWindow.webContents.downloadURL(url);
   });
   mainWindow.webContents.on("will-redirect", guardNavigation);
+  // will-navigate covers only the app's own frame. Inside an HTML artifact a
+  // web link goes to the system browser, at most once a second so a page that
+  // redirects itself in a loop cannot flood it.
+  let lastFrameExternalOpenAt = 0;
+  mainWindow.webContents.on("will-frame-navigate", (event) => {
+    const decision = frameNavigationDecision({
+      url: event.url,
+      isMainFrame: event.isMainFrame,
+      isSameDocument: event.isSameDocument,
+      frameUrl: event.frame?.url,
+      appUrl: mainWindow.webContents.getURL(),
+    });
+    if (!decision) return;
+    event.preventDefault();
+    if (!decision.openExternal || Date.now() - lastFrameExternalOpenAt < 1_000) return;
+    lastFrameExternalOpenAt = Date.now();
+    void shell.openExternal(decision.openExternal);
+  });
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     if (isAllowedPrintPreviewUrl(url, mainWindow.webContents.getURL())) {
@@ -1864,7 +1882,11 @@ const startApplication = async () => {
     if (result) return writeDiagnostic("windows.taskbar-shortcuts", result);
   }).catch((error) => { void writeDiagnostic("windows.taskbar-shortcuts-unavailable", { message: error.message }); });
   await writeFile(crashMarkerPath(), new Date().toISOString());
-  session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
+  // Every permission is refused except the Fullscreen API: Electron routes
+  // element.requestFullscreen() through this handler, and a refusal leaves the
+  // request hanging (the artifact reader's immersive mode, the pages it shows
+  // and video players rely on it). Chromium still requires a user gesture.
+  session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) => callback(permission === "fullscreen"));
   registerDesktopAppProtocol();
   registerResourceProtocol();
   await preparePackagedRendererOrigin();
@@ -2466,6 +2488,8 @@ const startApplication = async () => {
     const response = await handleResourceProtocolRequest(new Request(
       `edgeever-resource://resource/${encodeURIComponent(id)}`,
     ));
+    // 504: neither the account's cache nor the instance could provide the bytes.
+    if (response.status === 504) throw new Error("resource_unavailable_offline");
     if (!response.ok) throw new Error(`Resource request failed (${response.status})`);
     return {
       type: response.headers.get("content-type") || "application/octet-stream",

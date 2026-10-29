@@ -2,7 +2,7 @@ import type { NotebookUpdateInput } from "@edgeever/shared";
 import { assertLocalMemoSnapshot } from "./local-memo-guard";
 import { localizeDefaultMemoTemplate } from "@edgeever/shared/memo-template-seeds";
 import { findArtifactLibrary, hasArtifactDocumentMarker, markdownToDoc, type MemoDetail, type MemoRevision, type MemoTemplate, type Notebook, type Resource, type ResourceListItem, type ResourceStorageSummary, type TagSummary, type TiptapDoc } from "@edgeever/shared";
-import { api } from "@/lib/api";
+import { api, ApiRequestError } from "@/lib/api";
 import {
   getLocalMemo,
   hasLocalMirrorData,
@@ -51,7 +51,7 @@ import { createDesktopRepository } from "@/lib/desktop-repository";
 import { isBrowserOffline } from "@/lib/network-status";
 import { notifySyncQueueDeferred } from "@/lib/sync-events";
 import { isActiveLocalMemoUpdateStatus, shouldAcceptRemoteMemoDetail } from "@/lib/memo-detail-freshness";
-import { cacheLocalResourceBytes, getCachedLocalResourceBytes } from "@/lib/local-resource-cache";
+import { cacheLocalResourceBytes, getCachedLocalResourceBytes, localResourceUrl, RESOURCE_UNAVAILABLE_OFFLINE } from "@/lib/local-resource-cache";
 import { withRepositoryMutationEvents } from "@/lib/repository-events";
 
 export type EdgeEverRepository = {
@@ -69,6 +69,11 @@ export type EdgeEverRepository = {
   /** With `locale`, an unedited default template is used in that UI language. */
   useTemplate(templateId: string, notebookId: string, locale?: string): Promise<{ memo: MemoDetail }>;
   uploadMemoResource(memoId: string, file: File): Promise<{ resource: Resource }>;
+  /**
+   * Bytes of a synced resource. The bytes are cached the first time they are
+   * read, and later reads fall back to that copy when the network is gone.
+   * Never read: offline, it fails with `RESOURCE_UNAVAILABLE_OFFLINE`.
+   */
   readResource(resourceId: string): Promise<Blob>;
   updateResource(resourceId: string, file: File, expectedContentHash: string): Promise<{ resource: Resource }>;
   listResources(): Promise<{ resources: ResourceListItem[]; summary: ResourceStorageSummary }>;
@@ -369,14 +374,23 @@ export const createWebRepository = (scope: string): EdgeEverRepository => {
   },
   async readResource(resourceId) {
     const local = (await listLocalResources(scope)).resources.find((resource) => resource.id === resourceId);
-    if (isOffline()) {
-      if (!local?.url) throw new Error("The resource is not available offline.");
-      const cached = await getCachedLocalResourceBytes(local.url);
+    const url = local?.url ?? localResourceUrl(resourceId);
+    const cachedOrUnavailable = async () => {
+      const cached = await getCachedLocalResourceBytes(url);
       if (cached) return cached;
-      throw new Error("The resource is not available offline.");
+      throw new Error(RESOURCE_UNAVAILABLE_OFFLINE);
+    };
+    if (isOffline()) return cachedOrUnavailable();
+    let response: Response;
+    try {
+      response = await api.getResourceResponse(url, { cache: "no-store" });
+    } catch (error) {
+      // A server answer is reported as is. Anything else means the network is
+      // gone even though the browser may still claim to be online.
+      if (error instanceof ApiRequestError) throw error;
+      return cachedOrUnavailable();
     }
-    const url = local?.url ?? `/api/v1/resources/${encodeURIComponent(resourceId)}/blob`;
-    const blob = await (await api.getResourceResponse(url, { cache: "no-store" })).blob();
+    const blob = await response.blob();
     await cacheLocalResourceBytes(url, blob).catch(() => undefined);
     return blob;
   },

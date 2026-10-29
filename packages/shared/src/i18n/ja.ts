@@ -1069,6 +1069,7 @@ export const ja = {
     deleteForever: "完全に削除",
     loading: "ページを読み込んでいます…",
     loadFailed: "ページを読み込めませんでした。接続を確認して、もう一度お試しください。",
+    offlineUnavailable: "このページはまだこの端末で開いていないため、読み込むにはネット接続が必要です。オンラインで一度開くと、以後はオフラインでも表示できます。",
     updateFailed: "変更は保存されませんでした",
     importFailedTitle: "HTML 成果物を読み込めませんでした",
     importInvalid: "読み込めるのは、空でない UTF-8 の .html または .htm ファイルだけです。",

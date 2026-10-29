@@ -13,10 +13,11 @@ import { RevisionHistoryDialog } from "./dialogs/RevisionHistoryDialog";
 import { HtmlArtifactExportImageDialog } from "./HtmlArtifactExportImageDialog";
 import { connectArtifactBridge, createArtifactBridge, type ArtifactBridgeConnection } from "@/lib/html-artifact-bridge";
 import { HTML_ARTIFACT_SANDBOX } from "@/lib/html-artifact-sandbox";
+import { RESOURCE_UNAVAILABLE_OFFLINE } from "@/lib/local-resource-cache";
 import type { EdgeEverRepository } from "@/lib/repository";
 import { parseTagsText } from "@/lib/utils";
 
-type LoadState = { status: "loading" } | { status: "ready"; html: string } | { status: "error" };
+type LoadState = { status: "loading" } | { status: "ready"; html: string } | { status: "error" } | { status: "offline" };
 
 export default function HtmlArtifactReader({
   memo,
@@ -94,8 +95,10 @@ export default function HtmlArtifactReader({
       .then((html) => {
         if (!cancelled) setLoadState({ status: "ready", html });
       })
-      .catch(() => {
-        if (!cancelled) setLoadState({ status: "error" });
+      .catch((error: unknown) => {
+        if (cancelled) return;
+        // A page never opened on this device has no cached copy to show offline.
+        setLoadState({ status: error instanceof Error && error.message === RESOURCE_UNAVAILABLE_OFFLINE ? "offline" : "error" });
       });
     return () => {
       cancelled = true;
@@ -285,8 +288,8 @@ export default function HtmlArtifactReader({
             srcDoc={framed.srcDoc}
           />
         ) : (
-          <div className="flex h-full items-center justify-center px-6 text-center text-sm text-slate-500" role={loadState.status === "error" ? "alert" : "status"}>
-            {t(loadState.status === "error" ? "htmlArtifact.loadFailed" : "htmlArtifact.loading")}
+          <div className="flex h-full items-center justify-center px-6 text-center text-sm text-slate-500" role={loadState.status === "loading" ? "status" : "alert"}>
+            {t(loadState.status === "offline" ? "htmlArtifact.offlineUnavailable" : loadState.status === "error" ? "htmlArtifact.loadFailed" : "htmlArtifact.loading")}
           </div>
         )}
       </div>

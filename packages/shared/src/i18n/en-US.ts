@@ -1080,6 +1080,7 @@ export const enUS = {
     deleteForever: "Delete forever",
     loading: "Loading the page…",
     loadFailed: "The page could not be loaded. Check your connection and try again.",
+    offlineUnavailable: "This page has not been opened on this device yet, so it needs a connection to load. Open it once online to view it offline later.",
     updateFailed: "The change was not saved",
     importFailedTitle: "Could not import the HTML artifact",
     importInvalid: "Only non-empty UTF-8 .html or .htm files can be imported.",

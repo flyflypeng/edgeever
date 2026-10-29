@@ -1069,6 +1069,7 @@ export const pl = {
     deleteForever: "Usuń trwale",
     loading: "Wczytywanie strony…",
     loadFailed: "Nie udało się wczytać strony. Sprawdź połączenie i spróbuj ponownie.",
+    offlineUnavailable: "Ta strona nie była jeszcze otwierana na tym urządzeniu, więc do wczytania potrzebuje połączenia. Otwórz ją raz online, aby później oglądać ją offline.",
     updateFailed: "Zmiana nie została zapisana",
     importFailedTitle: "Nie udało się zaimportować artefaktu HTML",
     importInvalid: "Można importować tylko niepuste pliki .html lub .htm w kodowaniu UTF-8.",
