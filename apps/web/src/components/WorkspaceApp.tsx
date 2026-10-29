@@ -3902,6 +3902,7 @@ export const WorkspaceApp = ({
                             await Promise.all([
                               queryClient.invalidateQueries({ queryKey: ["memos"], refetchType: "inactive" }),
                               queryClient.invalidateQueries({ queryKey: ["tags"] }),
+                              queryClient.invalidateQueries({ queryKey: ["memo-revisions", memo.id] }),
                             ]);
                           }}
                           onDelete={(memoId) => deleteMemoMutation.mutate({ memoId, permanent: false })}

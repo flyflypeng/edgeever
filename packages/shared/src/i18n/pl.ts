@@ -1077,6 +1077,11 @@ export const pl = {
     importMissingAssets: "{{name}}: brak lokalnych zasobów {{assets}}",
     dropTitle: "Upuść, aby zaimportować artefakty HTML",
     dropDescription: "Obsługiwane są pliki .html lub .htm, do 20 MB każdy",
+    replaceContent: "Zastąp zawartość…",
+    history: "Historia wersji",
+    replaceFailed: "Nie udało się zastąpić zawartości. Spróbuj ponownie później.",
+    replaceOffline: "Zastąpienie zawartości wymaga połączenia. Sprawdź sieć i spróbuj ponownie.",
+    replaceConflict: "Ten artefakt został zmieniony w innym miejscu. Odśwież go przed zastąpieniem zawartości.",
   },
   notebookTree: {
     dragNotebook: "Przenieś notatnik „{{name}}”",

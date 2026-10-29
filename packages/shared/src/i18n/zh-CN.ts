@@ -1088,6 +1088,11 @@ export const zhCN = {
     importMissingAssets: "{{name}}：缺少本地资源 {{assets}}",
     dropTitle: "松开以导入 HTML 制品",
     dropDescription: "支持多个 .html 或 .htm 文件，每个不超过 20MB",
+    replaceContent: "替换内容…",
+    history: "版本历史",
+    replaceFailed: "没能替换内容，请稍后重试。",
+    replaceOffline: "替换内容需要联网。请检查网络后重试。",
+    replaceConflict: "这个制品已在别处更新。请刷新后再替换。",
   },
   notebookTree: {
     dragNotebook: "移动笔记本「{{name}}」",

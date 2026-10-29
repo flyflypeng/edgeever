@@ -2,7 +2,7 @@ import { ARTIFACT_MAX_HTML_BYTES } from "@edgeever/shared";
 import type { Hono } from "hono";
 import type { AppEnv } from "./api-context";
 import { AppError } from "./app-error";
-import { createHtmlArtifact } from "./artifact-service";
+import { createHtmlArtifact, replaceHtmlArtifactContent } from "./artifact-service";
 import { apiError, badRequest } from "./http-errors";
 import { getActorLabel, getAuditActor, getWorkspaceId, hasScopes, requireScopes } from "./request-auth";
 
@@ -14,6 +14,13 @@ const parseTags = (value: FormDataEntryValue | null) => {
   const parsed = JSON.parse(value) as unknown;
   if (!Array.isArray(parsed) || parsed.some((tag) => typeof tag !== "string")) throw new Error("invalid tags");
   return parsed as string[];
+};
+
+const parseExpectedRevision = (value: FormDataEntryValue | null) => {
+  if (value === null || value === "") return undefined;
+  const revision = typeof value === "string" ? Number(value) : Number.NaN;
+  if (!Number.isInteger(revision) || revision < 0) throw new Error("invalid expectedRevision");
+  return revision;
 };
 
 export const registerArtifactRoutes = (app: Hono<AppEnv>) => {
@@ -56,6 +63,43 @@ export const registerArtifactRoutes = (app: Hono<AppEnv>) => {
         canCreateLibrary: Boolean(auth && hasScopes(auth, ["write:notebooks"])),
       });
       return context.json(created, 201);
+    } catch (error) {
+      if (error instanceof AppError) return apiError(context, error.code, error.message, error.status);
+      throw error;
+    }
+  });
+
+  app.put("/api/v1/artifacts/:id/content", async (context) => {
+    const denied = requireScopes(context, "write:memos", "write:resources");
+    if (denied) return denied;
+
+    const declaredBytes = Number(context.req.header("Content-Length"));
+    if (Number.isFinite(declaredBytes) && declaredBytes > MAX_CREATE_REQUEST_BYTES) {
+      return apiError(context, "artifact_too_large", "HTML artifacts can be at most 20 MB.", 413);
+    }
+
+    const form = await context.req.raw.formData().catch(() => null);
+    const file = form?.get("file");
+    if (!form || !(file instanceof File)) return badRequest(context, "Expected multipart form field named file.");
+    let expectedRevision: number | undefined;
+    try {
+      expectedRevision = parseExpectedRevision(form.get("expectedRevision"));
+    } catch {
+      return badRequest(context, "expectedRevision must be a non-negative integer.");
+    }
+
+    try {
+      const memo = await replaceHtmlArtifactContent(context, {
+        workspaceId: getWorkspaceId(context),
+        memoId: context.req.param("id"),
+        filename: file.name,
+        bytes: new Uint8Array(await file.arrayBuffer()),
+        expectedRevision,
+        source: { type: "upload" },
+        actor: getAuditActor(context),
+        actorLabel: getActorLabel(context),
+      });
+      return context.json({ memo });
     } catch (error) {
       if (error instanceof AppError) return apiError(context, error.code, error.message, error.status);
       throw error;

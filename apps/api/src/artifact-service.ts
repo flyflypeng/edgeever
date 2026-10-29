@@ -2,16 +2,22 @@ import {
   ARTIFACT_MAX_HTML_BYTES,
   ARTIFACT_MAX_LOCAL_ASSET_LENGTH,
   ARTIFACT_MAX_MISSING_LOCAL_ASSETS,
+  createExcerpt,
+  hasArtifactDocumentMarker,
   markdownToDoc,
+  parseArtifactDocument,
   serializeArtifactDocument,
   type ArtifactDocument,
   type MemoDetail,
 } from "@edgeever/shared";
 import type { AppContext, AuditActor } from "./api-context";
 import { AppError } from "./app-error";
-import { createId } from "./entity-utils";
-import { sha256Bytes } from "./hash-utils";
-import { createMemoRecord, getMemoDetail } from "./memo-service";
+import { auditStatement } from "./audit";
+import { createId, isoNow } from "./entity-utils";
+import { sha256, sha256Bytes } from "./hash-utils";
+import { createMemoRevisionStatement } from "./memo-revision-service";
+import { upsertMemoSearchDocumentStatement } from "./memo-search-index";
+import { createMemoRecord, getMemoDetail, getMemoDetailRow } from "./memo-service";
 import { ensureArtifactLibrary, findArtifactLibrary, findArtifactLibraryAncestorId, MEMO_LOCATION_INVALID } from "./notebook-service";
 import { createAttachmentResource, normalizeFilename } from "./resource-service";
 import type { DatabaseAdapter } from "./storage-contract";
@@ -108,6 +114,9 @@ export const findMissingLocalAssets = (html: string) => {
   }
   return [...missing];
 };
+/** The memo body of an artifact: fallback text for other clients plus the envelope. */
+export const artifactContentMarkdown = (document: ArtifactDocument, contentText: string) =>
+  serializeArtifactDocument(document, contentText.slice(0, FALLBACK_EXCERPT_LENGTH));
 
 const invalidHtml = (message: string) => new AppError("artifact_invalid_html", message, 400);
 
@@ -192,7 +201,7 @@ export const createHtmlArtifact = async (
     ...(missingLocalAssets.length ? { missingLocalAssets } : {}),
     source: input.source,
   };
-  const contentMarkdown = serializeArtifactDocument(document, contentText.slice(0, FALLBACK_EXCERPT_LENGTH));
+  const contentMarkdown = artifactContentMarkdown(document, contentText);
   const memo = await createMemoRecord(db, input.workspaceId, {
     notebookId: folderId,
     title,
@@ -218,4 +227,114 @@ export const createHtmlArtifact = async (
   }
 
   return { memo: (await getMemoDetail(db, input.workspaceId, memo.id)) ?? memo, missingLocalAssets };
+};
+
+export type ReplaceHtmlArtifactContentInput = {
+  workspaceId: string;
+  memoId: string;
+  filename: string;
+  bytes: Uint8Array;
+  expectedRevision?: number;
+  source: ArtifactDocument["source"];
+  actor: AuditActor;
+  actorLabel: string;
+};
+
+/**
+ * Replaces an artifact's page with a new HTML file as a new version: the HTML
+ * goes into a new resource and the previous version is snapshotted. The old
+ * resource stays, so restoring that revision shows its page again. The title
+ * and tags are kept; the thumbnail is kept but no longer matches the new HTML,
+ * so clients report it as stale and regenerate it.
+ */
+export const replaceHtmlArtifactContent = async (context: AppContext, input: ReplaceHtmlArtifactContentInput): Promise<MemoDetail> => {
+  const db = context.env.storage.db;
+  const current = await getMemoDetailRow(db, input.workspaceId, input.memoId);
+  if (!current) throw new AppError("not_found", "Memo not found", 404);
+  const previous = parseArtifactDocument(current.content_markdown);
+  if (!previous) throw new AppError("bad_request", "Only HTML artifacts can have their content replaced.", 400);
+  if (input.expectedRevision !== undefined && input.expectedRevision !== current.revision) {
+    throw new AppError("revision_conflict", "Memo was updated elsewhere. Reload before saving.", 409);
+  }
+  const html = decodeArtifactHtml(input.filename, input.bytes);
+  const originalFilename = normalizeFilename(input.filename) || previous.originalFilename;
+  const contentText = extractHtmlText(html);
+  const htmlResourceId = createId("res");
+  const missingLocalAssets = findMissingLocalAssets(html);
+  const { missingLocalAssets: _previousMissing, ...kept } = previous;
+  const document: ArtifactDocument = {
+    ...kept,
+    htmlResourceId,
+    originalFilename,
+    byteSize: input.bytes.byteLength,
+    sha256: await sha256Bytes(input.bytes),
+    ...(missingLocalAssets.length ? { missingLocalAssets } : {}),
+    source: input.source,
+  };
+  const contentMarkdown = artifactContentMarkdown(document, contentText);
+  const contentJson = markdownToDoc(contentMarkdown);
+  const contentHash = await sha256(contentMarkdown + JSON.stringify(contentJson));
+
+  // Store the page first: a failed upload must leave the current version as it was.
+  await createAttachmentResource(context, {
+    memoId: input.memoId,
+    resourceId: htmlResourceId,
+    filename: originalFilename,
+    mimeType: "text/html",
+    bytes: input.bytes,
+    actor: input.actor,
+    workspaceId: input.workspaceId,
+  });
+
+  const nextRevision = current.revision + 1;
+  const now = isoNow();
+  await db.batch([
+    createMemoRevisionStatement(db, current, input.actorLabel, now),
+    db.prepare(
+      `UPDATE memos SET excerpt = ?, updated_by = ?, updated_at = ?
+       WHERE id = ? AND workspace_id = ? AND is_deleted = 0`,
+    ).bind(createExcerpt(contentText), input.actorLabel, now, input.memoId, input.workspaceId),
+    db.prepare(
+      `UPDATE memo_contents
+       SET content_json = ?, content_markdown = ?, content_text = ?, content_hash = ?, revision = ?, updated_at = ?
+       WHERE memo_id = ?`,
+    ).bind(JSON.stringify(contentJson), contentMarkdown, contentText, contentHash, nextRevision, now, input.memoId),
+    upsertMemoSearchDocumentStatement(db, input.memoId, current.title, contentText, JSON.parse(current.tags_json).join(" ")),
+    auditStatement(db, input.actor.actorType, input.actor.actorId, "artifact.replace_content", "memo", input.memoId, {
+      revision: nextRevision,
+      htmlResourceId,
+      previousHtmlResourceId: previous.htmlResourceId,
+    }),
+  ]);
+
+  const memo = await getMemoDetail(db, input.workspaceId, input.memoId);
+  if (!memo) throw new AppError("not_found", "Memo not found after replacing its content", 404);
+  return memo;
+};
+
+/**
+ * The body a revision restore writes for an artifact. An artifact stays an
+ * artifact: a revision without a valid envelope, or whose HTML is gone, is
+ * refused. A thumbnail that has since been removed is dropped from the
+ * envelope, so clients regenerate it instead of showing a broken image.
+ */
+export const resolveArtifactRevisionContent = async (
+  db: DatabaseAdapter,
+  memoId: string,
+  currentMarkdown: string,
+  revisionMarkdown: string,
+  contentText: string,
+): Promise<string> => {
+  const isArtifact = hasArtifactDocumentMarker(currentMarkdown);
+  if (!isArtifact && !hasArtifactDocumentMarker(revisionMarkdown)) return revisionMarkdown;
+  const document = parseArtifactDocument(revisionMarkdown);
+  const refused = (message: string) => new AppError("artifact_update_required", message, 409);
+  if (!isArtifact || !document) throw refused("A note and an HTML artifact cannot be restored into each other.");
+  const activeResourceIds = new Set((await db.prepare(
+    `SELECT id FROM resources WHERE memo_id = ? AND is_deleted = 0 AND id IN (?, ?)`,
+  ).bind(memoId, document.htmlResourceId, document.thumbnailResourceId ?? document.htmlResourceId).all<{ id: string }>()).results.map((row) => row.id));
+  if (!activeResourceIds.has(document.htmlResourceId)) throw refused("The HTML of this revision is no longer available.");
+  if (!document.thumbnailResourceId || activeResourceIds.has(document.thumbnailResourceId)) return revisionMarkdown;
+  const { thumbnailResourceId: _thumbnail, thumbnailSha256: _thumbnailSha256, ...withoutThumbnail } = document;
+  return artifactContentMarkdown(withoutThumbnail, contentText);
 };

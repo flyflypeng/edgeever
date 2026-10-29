@@ -1,13 +1,15 @@
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { ArrowLeft, Download, Maximize, RotateCcw, RotateCw, Trash2 } from "lucide-react";
+import { ArrowLeft, Download, FileUp, History, Maximize, RotateCcw, RotateCw, Trash2 } from "lucide-react";
 import { parseArtifactDocument, type MemoDetail } from "@edgeever/shared";
 import { Button } from "@/components/ui/button";
 import { IconTooltip } from "./editor/EditorPaneChrome";
 import { EditorTagPicker } from "./EditorTagPicker";
 import { MemoTitleInput } from "./MemoTitleInput";
 import { MEMO_EDITOR_TOP_ROW_CLASS_NAME } from "./MemoEditorChromeDensity";
+import { ApiRequestError } from "@/lib/api";
 import { downloadBlob } from "@/lib/infographic-image-export";
+import { RevisionHistoryDialog } from "./dialogs/RevisionHistoryDialog";
 import type { EdgeEverRepository } from "@/lib/repository";
 import { parseTagsText } from "@/lib/utils";
 
@@ -48,6 +50,10 @@ export default function HtmlArtifactReader({
   const [title, setTitle] = useState(memo.title ?? "");
   const [updateError, setUpdateError] = useState(false);
   const [tagsText, setTagsText] = useState(memo.tags.join(", "));
+  const [replaceError, setReplaceError] = useState<string | null>(null);
+  const [replacing, setReplacing] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const replaceInputRef = useRef<HTMLInputElement>(null);
   const viewerRef = useRef<HTMLDivElement>(null);
   const savedTitleRef = useRef(memo.title ?? "");
 
@@ -113,6 +119,24 @@ export default function HtmlArtifactReader({
     downloadBlob(new Blob([loadState.html], { type: "text/html;charset=utf-8" }), artifact.originalFilename);
   };
 
+  const replaceContent = (file: File) => {
+    setReplaceError(null);
+    setReplacing(true);
+    void repository.replaceArtifactContent(memo, file)
+      .then((result) => onUpdated(result.memo))
+      .catch((error: unknown) => {
+        const code = error instanceof ApiRequestError ? error.code : error instanceof Error ? error.message : null;
+        setReplaceError(t(
+          code === "artifact_invalid_html" ? "htmlArtifact.importInvalid"
+            : code === "artifact_too_large" ? "htmlArtifact.importTooLarge"
+              : code === "artifact_replace_offline" ? "htmlArtifact.replaceOffline"
+                : code === "revision_conflict" ? "htmlArtifact.replaceConflict"
+                  : "htmlArtifact.replaceFailed",
+        ));
+      })
+      .finally(() => setReplacing(false));
+  };
+
   const enterFullscreen = () => {
     void viewerRef.current?.requestFullscreen().catch(() => undefined);
   };
@@ -165,6 +189,7 @@ export default function HtmlArtifactReader({
             onChange={commitTags}
           />
           {updateError && <span role="alert" className="shrink-0 text-xs text-rose-600">{t("htmlArtifact.updateFailed")}</span>}
+          {replaceError && <span role="alert" className="max-w-64 shrink-0 truncate text-xs text-rose-600" title={replaceError}>{replaceError}</span>}
           <IconTooltip label={t("htmlArtifact.reload")}>
             <Button variant="ghost" size="icon" aria-label={t("htmlArtifact.reload")} disabled={loadState.status !== "ready"} onClick={() => setReloadKey((key) => key + 1)}>
               <RotateCw className="h-4 w-4" />
@@ -178,6 +203,18 @@ export default function HtmlArtifactReader({
           <IconTooltip label={t("htmlArtifact.download")}>
             <Button variant="ghost" size="icon" aria-label={t("htmlArtifact.download")} disabled={loadState.status !== "ready"} onClick={downloadHtml}>
               <Download className="h-4 w-4" />
+            </Button>
+          </IconTooltip>
+          {!readOnly && (
+            <IconTooltip label={t("htmlArtifact.replaceContent")}>
+              <Button variant="ghost" size="icon" aria-label={t("htmlArtifact.replaceContent")} disabled={replacing} onClick={() => replaceInputRef.current?.click()}>
+                <FileUp className="h-4 w-4" />
+              </Button>
+            </IconTooltip>
+          )}
+          <IconTooltip label={t("htmlArtifact.history")}>
+            <Button variant="ghost" size="icon" aria-label={t("htmlArtifact.history")} onClick={() => setHistoryOpen(true)}>
+              <History className="h-4 w-4" />
             </Button>
           </IconTooltip>
           {readOnly ? (
@@ -202,6 +239,18 @@ export default function HtmlArtifactReader({
           )}
         </div>
       </div>
+      <input
+        ref={replaceInputRef}
+        type="file"
+        accept=".html,.htm,text/html"
+        className="hidden"
+        data-html-artifact-replace-input
+        onChange={(event) => {
+          const file = event.currentTarget.files?.[0];
+          event.currentTarget.value = "";
+          if (file) replaceContent(file);
+        }}
+      />
       <div ref={viewerRef} className="relative min-h-0 flex-1 bg-white" data-html-artifact-viewer>
         {loadState.status === "ready" ? (
           <iframe
@@ -219,6 +268,19 @@ export default function HtmlArtifactReader({
           </div>
         )}
       </div>
+      {historyOpen && (
+        <RevisionHistoryDialog
+          memo={memo}
+          repository={repository}
+          currentMarkdown={memo.contentText}
+          compareRevisionText
+          onClose={() => setHistoryOpen(false)}
+          onRestored={async (restoredMemo) => {
+            setHistoryOpen(false);
+            await onUpdated(restoredMemo);
+          }}
+        />
+      )}
     </section>
   );
 }

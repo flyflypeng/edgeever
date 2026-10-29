@@ -26,12 +26,15 @@ export const RevisionHistoryDialog = ({
   memo,
   repository,
   currentMarkdown,
+  compareRevisionText = false,
   onClose,
   onRestored,
 }: {
   memo: MemoDetail;
   repository: EdgeEverRepository;
   currentMarkdown: string;
+  /** Compare the revisions' plain text instead of their Markdown, for bodies whose Markdown is not readable. */
+  compareRevisionText?: boolean;
   onClose: () => void;
   onRestored: (memo: MemoDetail) => Promise<void>;
 }) => {
@@ -49,8 +52,8 @@ export const RevisionHistoryDialog = ({
     revisions.find((revision) => revision.id === selectedRevisionId) ?? revisions[0] ?? null;
 
   const diffRows = useMemo(
-    () => buildRevisionDiffRows(selectedRevision?.contentMarkdown ?? "", currentMarkdown),
-    [currentMarkdown, selectedRevision?.contentMarkdown]
+    () => buildRevisionDiffRows((compareRevisionText ? selectedRevision?.contentText : selectedRevision?.contentMarkdown) ?? "", currentMarkdown),
+    [compareRevisionText, currentMarkdown, selectedRevision?.contentMarkdown, selectedRevision?.contentText]
   );
 
   const diffSummary = useMemo(() => {

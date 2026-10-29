@@ -1,7 +1,7 @@
 import type { NotebookUpdateInput } from "@edgeever/shared";
 import { assertLocalMemoSnapshot } from "./local-memo-guard";
 import { localizeDefaultMemoTemplate } from "@edgeever/shared/memo-template-seeds";
-import { findArtifactLibrary, markdownToDoc, type MemoDetail, type MemoRevision, type MemoTemplate, type Notebook, type Resource, type ResourceListItem, type ResourceStorageSummary, type TagSummary, type TiptapDoc } from "@edgeever/shared";
+import { findArtifactLibrary, hasArtifactDocumentMarker, markdownToDoc, type MemoDetail, type MemoRevision, type MemoTemplate, type Notebook, type Resource, type ResourceListItem, type ResourceStorageSummary, type TagSummary, type TiptapDoc } from "@edgeever/shared";
 import { api } from "@/lib/api";
 import {
   getLocalMemo,
@@ -97,6 +97,8 @@ export type EdgeEverRepository = {
    * always sends the body, which the server refuses for artifacts. Requires a connection.
    */
   updateArtifactMetadata(memo: MemoDetail, input: { title?: string; tags?: string[] }): Promise<{ memo: MemoDetail }>;
+  /** Replaces an artifact's page with a new HTML file as a new version on the server. Requires a connection. */
+  replaceArtifactContent(memo: MemoDetail, file: File): Promise<{ memo: MemoDetail }>;
   listMemos(params: LocalMemoListParams): Promise<LocalMemoListResponse>;
   getMemo(memoId: string, includeDeleted?: boolean): Promise<{ memo: MemoDetail }>;
   createMemo(input: { notebookId: string; title?: string; contentJson?: TiptapDoc; contentMarkdown?: string; tags?: string[] }): Promise<{ memo: MemoDetail }>;
@@ -492,6 +494,13 @@ export const createWebRepository = (scope: string): EdgeEverRepository => {
     return result;
   },
 
+  replaceArtifactContent: async (memo, file) => {
+    if (isOffline()) throw new Error("artifact_replace_offline");
+    const result = await api.replaceArtifactContent(memo.id, file, { expectedRevision: memo.revision });
+    await putLocalMemo(scope, result.memo);
+    return result;
+  },
+
   createHtmlArtifact: async (file, input) => {
     if (isOffline()) throw new Error("artifact_import_offline");
     const result = await api.createHtmlArtifact(file, input);
@@ -648,6 +657,13 @@ export const createWebRepository = (scope: string): EdgeEverRepository => {
   },
   async restoreMemoRevision(memoId, revisionId) {
     const [memo, revision] = await Promise.all([getLocalMemo(scope, memoId), getLocalMemoRevision(scope, memoId, revisionId)]);
+    // The server refuses queued body saves for artifacts; only it restores their HTML.
+    if (hasArtifactDocumentMarker(memo?.contentMarkdown)) {
+      if (isOffline()) throw new Error("artifact_restore_offline");
+      const result = await api.restoreMemoRevision(memoId, revisionId);
+      await putLocalMemo(scope, result.memo);
+      return result;
+    }
     if (!memo || !revision) {
       if (isOffline()) throw new Error("Revision is not available offline");
       return api.restoreMemoRevision(memoId, revisionId);

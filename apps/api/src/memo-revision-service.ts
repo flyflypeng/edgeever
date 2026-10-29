@@ -4,12 +4,14 @@ import {
   docToMarkdown,
   docToText,
   emptyDoc,
+  markdownToDoc,
   type MemoDetail,
   type MemoRevision,
   type TiptapDoc,
 } from "@edgeever/shared";
 import type { AuditActor } from "./api-context";
 import { AppError } from "./app-error";
+import { resolveArtifactRevisionContent } from "./artifact-service";
 import { auditStatement } from "./audit";
 import { createId, isoNow, parseJsonArray } from "./entity-utils";
 import { sha256 } from "./hash-utils";
@@ -196,9 +198,12 @@ export const restoreMemoRevision = async (
   if (!revision) throw new AppError("not_found", "Memo revision not found", 404);
 
   const tags = parseJsonArray(revision.tags_json);
-  const contentJson = parseDoc(revision.content_json);
-  const contentMarkdown = revision.content_markdown || docToMarkdown(contentJson);
-  const contentText = revision.content_text || docToText(contentJson);
+  const revisionJson = parseDoc(revision.content_json);
+  const revisionMarkdown = revision.content_markdown || docToMarkdown(revisionJson);
+  const contentText = revision.content_text || docToText(revisionJson);
+  // Artifacts may only come back as artifacts whose HTML still exists.
+  const contentMarkdown = await resolveArtifactRevisionContent(db, memoId, current.content_markdown, revisionMarkdown, contentText);
+  const contentJson = contentMarkdown === revisionMarkdown ? revisionJson : markdownToDoc(contentMarkdown);
   const title = normalizeMemoTitle(revision.title);
   const contentHash = await sha256(contentMarkdown + JSON.stringify(contentJson));
   const nextRevision = current.revision + 1;
