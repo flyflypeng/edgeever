@@ -405,6 +405,7 @@ export const MemoListPane = ({
   onCreateMemo,
   onImportMarkdownFiles,
   onImportHtmlArtifactFiles,
+  onImportHtmlArtifact,
   onArtifactThumbnailNeeded,
   isSyncingMemos,
   canSyncMemos,
@@ -486,6 +487,8 @@ export const MemoListPane = ({
   onImportMarkdownFiles: (files: File[]) => void;
   /** Imports dropped .html/.htm files as HTML artifacts. */
   onImportHtmlArtifactFiles: (files: File[]) => void;
+  /** Opens the file picker that imports local HTML pages as artifacts. */
+  onImportHtmlArtifact: () => void;
   /** An artifact card without an up-to-date thumbnail is on screen. */
   onArtifactThumbnailNeeded?: (memo: MemoSummary) => void;
   isSyncingMemos: boolean;
@@ -1137,7 +1140,7 @@ export const MemoListPane = ({
                   onCancelMobileSearch();
                 }}
                 className="min-w-0 flex-1 bg-transparent text-slate-900 outline-none placeholder:text-slate-400"
-                placeholder={t("memoList.searchPlaceholder")}
+                placeholder={t(inArtifactLibrary ? "memoList.artifactSearchPlaceholder" : "memoList.searchPlaceholder")}
               />
               {search && (
                 <button
@@ -1258,7 +1261,7 @@ export const MemoListPane = ({
                 }
               }}
               className="min-w-0 flex-1 bg-transparent text-slate-900 outline-none placeholder:text-slate-400"
-              placeholder={t("memoList.searchPlaceholder")}
+              placeholder={t(inArtifactLibrary ? "memoList.artifactSearchPlaceholder" : "memoList.searchPlaceholder")}
             />
             {search && (
               <button
@@ -1466,16 +1469,26 @@ export const MemoListPane = ({
         ) : memos.length === 0 ? (
           <div className="rounded-md border border-dashed border-slate-300 bg-card px-4 py-9 text-center">
             <div className="text-sm font-semibold text-slate-800">
-              {memos.length === 0 ? (view === "trash" ? t("memoList.trashEmptyTitle") : t("memoList.emptyTitle")) : t("memoList.noFilteredTitle")}
+              {memos.length === 0
+                ? view === "trash"
+                  ? t("memoList.trashEmptyTitle")
+                  : t(inArtifactLibrary ? "memoList.artifactEmptyTitle" : "memoList.emptyTitle")
+                : t("memoList.noFilteredTitle")}
             </div>
             <div className="mx-auto mt-2 max-w-[260px] text-xs leading-5 text-slate-500">
               {memos.length === 0
                 ? view === "trash"
                   ? t("memoList.trashEmptyDescription")
-                  : t("memoList.emptyDescription")
+                  : t(inArtifactLibrary ? "memoList.artifactEmptyDescription" : "memoList.emptyDescription")
                 : t("memoList.noFilteredDescription")}
             </div>
-            {memos.length === 0 && canCreateMemo && view !== "trash" && (
+            {memos.length === 0 && view !== "trash" && inArtifactLibrary && (
+              <Button className="mt-4 justify-center" size="sm" variant="solid" onClick={onImportHtmlArtifact}>
+                <FileCode2 className="h-4 w-4" />
+                {t("memoList.importArtifact")}
+              </Button>
+            )}
+            {memos.length === 0 && canCreateMemo && view !== "trash" && !inArtifactLibrary && (
               <Button className="mt-4 justify-center" size="sm" variant="solid" onClick={() => onCreateMemo()} disabled={isCreating}>
                 <FilePlus2 className="h-4 w-4" />
                 {t("memoList.newMemo")}
