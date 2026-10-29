@@ -16,6 +16,14 @@ _Avoid_: Folder, category, directory
 The single, undeletable default notebook of each workspace, where new notes without an explicit notebook land until they are organized. Users may rename it (e.g. "Unsorted", "Collection box").
 _Avoid_: Default notebook, uncategorized
 
+**Artifact Library**:
+The single, undeletable root container for artifacts in each workspace, shown in the UI as "Agent Artifacts" and renamable. Artifacts live only in the Artifact Library and ordinary memos cannot be placed there; the library and the notebook tree are kept apart.
+_Avoid_: Artifact notebook, agent directory
+
+**Artifact Folder**:
+A container inside the Artifact Library that groups artifacts; folders can nest without limit. "Folder" is used only inside the Artifact Library, never in the notebook tree.
+_Avoid_: Artifact notebook, category
+
 ## Content
 
 **Memo (Note)**:
@@ -25,6 +33,14 @@ _Avoid_: Short card, flash note, entry
 **Card**:
 How a memo is presented in Jot; not a data entity.
 _Avoid_: Treating a card as an object separate from its memo
+
+**Artifact**:
+A finished piece produced by an AI agent and kept and read in EdgeEver; a kind of memo, not a separate entity. Its content can only be replaced as a whole, never edited in place within EdgeEver; its title, tags, and location can change.
+_Avoid_: Output, product, attachment
+
+**HTML Artifact**:
+An artifact whose content is a single interactive HTML page; the first form of artifact.
+_Avoid_: Web note, HTML note
 
 ## Views and actions
 

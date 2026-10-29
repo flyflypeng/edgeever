@@ -169,7 +169,8 @@ describe("native clipboard snapshot authorization", () => {
     const main = readFileSync(new URL("./index.mjs", import.meta.url), "utf8");
     const preload = readFileSync(new URL("../preload/index.cjs", import.meta.url), "utf8");
     expect(main).toContain("registerClipboardReadIpc(ipcMain");
-    expect(main).toContain("setPermissionRequestHandler((_webContents, _permission, callback) => callback(false))");
+    // Only full screen is granted (HTML artifact reader); clipboard and every other permission stay denied.
+    expect(main).toContain('setPermissionRequestHandler((_webContents, permission, callback) => callback(permission === "fullscreen"))');
     expect(preload).toContain('ipcRenderer.invoke("desktop:read-clipboard")');
     expect(main + preload).not.toContain("desktop:paste-clipboard");
   });

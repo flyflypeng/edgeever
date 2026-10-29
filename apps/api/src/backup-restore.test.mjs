@@ -10,7 +10,9 @@ import { registerBackupRoutes } from "./backup-routes.ts";
 import { apiError } from "./http-errors.ts";
 import { restoreJsonMemos, restoreJsonNotebooks } from "./backup-service.ts";
 import { sha256, sha256Bytes } from "./hash-utils.ts";
+import { createHtmlArtifact } from "./artifact-service.ts";
 import { createMemoRecord, getMemoDetail, mapMemoDetail } from "./memo-service.ts";
+import { createNotebookRecord, ensureArtifactLibrary, findArtifactLibraryAncestorId } from "./notebook-service.ts";
 import { createImageResource } from "./resource-service.ts";
 import { createSelfHostedStorageAdapter } from "./self-hosted-storage-adapter.ts";
 
@@ -78,12 +80,13 @@ const installation = () => {
   };
 };
 
+// Mirrors the client's notebooks.json, which serializes the API's Notebook.
 const notebookBackups = (sqlite) => sqlite.query(
-  `SELECT id, parent_id, name, slug, icon, color, sort_order, created_at, updated_at
+  `SELECT id, parent_id, name, slug, icon, color, sort_order, created_at, updated_at, system_kind
    FROM notebooks WHERE workspace_id = ? AND is_deleted = 0 ORDER BY parent_id IS NOT NULL, sort_order, id`,
 ).all(WORKSPACE_ID).map((row) => ({
   id: row.id, parentId: row.parent_id, name: row.name, slug: row.slug, icon: row.icon, color: row.color,
-  sortOrder: row.sort_order, createdAt: row.created_at, updatedAt: row.updated_at,
+  sortOrder: row.sort_order, createdAt: row.created_at, updatedAt: row.updated_at, systemKind: row.system_kind,
 }));
 
 // Reads every page of GET /api/v1/backups/json and groups it per note, like the client.
@@ -393,6 +396,100 @@ describe("JSON backup and restore", () => {
     const withFile = backup.memos.find(({ resources }) => resources.length > 0);
     expect((await restoreResource(target, withFile.resources[0], PNG)).status).toBe(403);
     expect(target.sqlite.query("SELECT COUNT(*) AS count FROM memos WHERE created_by = 'restore'").get().count).toBe(0);
+  });
+});
+
+describe("JSON backup and restore of HTML artifacts", () => {
+  // The Artifact Library with one folder and one artifact in it, plus the
+  // ordinary notes, all created the way the app creates them.
+  const populateArtifacts = async (source) => {
+    await populate(source);
+    const library = await ensureArtifactLibrary(source.storage.db, WORKSPACE_ID, "en", actor);
+    const folder = await createNotebookRecord(source.storage.db, WORKSPACE_ID, { name: "Reports", parentId: library.id }, actor);
+    const { memo: artifact } = await createHtmlArtifact(source.context, {
+      workspaceId: WORKSPACE_ID,
+      filename: "report.html",
+      bytes: new TextEncoder().encode("<title>Q3 report</title><h1>Revenue grew</h1><script>1</script>"),
+      folderId: folder.id,
+      tags: [],
+      source: { type: "upload" },
+      locale: "en",
+      actor,
+      actorLabel: "admin",
+      canCreateLibrary: true,
+    });
+    return { library, folder, artifact };
+  };
+  const notebookRow = (sqlite, id) => sqlite.query("SELECT parent_id, system_kind, is_deleted FROM notebooks WHERE id = ?").get(id);
+  const memoRow = (sqlite, id) => sqlite.query(
+    "SELECT m.notebook_id, c.content_text FROM memos m JOIN memo_contents c ON c.memo_id = m.id WHERE m.id = ?",
+  ).get(id);
+  const activeLibraries = (sqlite) => sqlite.query(
+    "SELECT id FROM notebooks WHERE workspace_id = ? AND system_kind = 'artifact_library' AND is_deleted = 0",
+  ).all(WORKSPACE_ID).map((row) => row.id);
+
+  test("a new installation gets the library back as the library, with its folders and artifacts", async () => {
+    const source = installation();
+    const { library, folder, artifact } = await populateArtifacts(source);
+    const backup = await exportBackup(source);
+    expect(backup.notebooks.find((notebook) => notebook.id === library.id).systemKind).toBe("artifact_library");
+
+    const target = installation();
+    await restoreBackup(target, backup);
+
+    expect(activeLibraries(target.sqlite)).toEqual([library.id]);
+    expect(notebookRow(target.sqlite, folder.id)).toEqual({ parent_id: library.id, system_kind: null, is_deleted: 0 });
+    expect(memoRow(target.sqlite, artifact.id)).toEqual(memoRow(source.sqlite, artifact.id));
+    expect(memoRow(target.sqlite, artifact.id).content_text).toContain("Revenue grew");
+    const restored = await getMemoDetail(target.storage.db, WORKSPACE_ID, artifact.id);
+    expect(restored.artifact.htmlResourceId).toBe(artifact.artifact.htmlResourceId);
+  });
+
+  test("a backup library goes inside the library the installation already has", async () => {
+    const source = installation();
+    const { library, folder, artifact } = await populateArtifacts(source);
+    const backup = await exportBackup(source);
+    const target = installation();
+    const existing = await ensureArtifactLibrary(target.storage.db, WORKSPACE_ID, "en", actor);
+
+    await restoreBackup(target, backup);
+
+    expect(activeLibraries(target.sqlite)).toEqual([existing.id]);
+    expect(notebookRow(target.sqlite, library.id)).toEqual({ parent_id: existing.id, system_kind: null, is_deleted: 0 });
+    expect(memoRow(target.sqlite, artifact.id).notebook_id).toBe(folder.id);
+    expect(await findArtifactLibraryAncestorId(target.storage.db, WORKSPACE_ID, folder.id)).toBe(existing.id);
+  });
+
+  test("a backup without library identity keeps the library and puts each memo on its side of the boundary", async () => {
+    const source = installation();
+    const { library, folder, artifact } = await populateArtifacts(source);
+    const backup = await exportBackup(source);
+    // Backups written before notebooks carried systemKind.
+    const legacyNotebooks = backup.notebooks.map(({ systemKind: _systemKind, ...notebook }) => notebook);
+    const ordinary = backup.memos.find(({ memo }) => !memo.contentMarkdown.includes("edgeever-artifact-v1"));
+    const misplacedNote = { ...ordinary, memo: { ...ordinary.memo, notebookId: folder.id } };
+
+    // Back into the installation it came from: the library stays the library.
+    await restoreBackup(source, { ...backup, notebooks: legacyNotebooks });
+    expect(activeLibraries(source.sqlite)).toEqual([library.id]);
+    expect(memoRow(source.sqlite, artifact.id).notebook_id).toBe(folder.id);
+
+    // Into a new installation the old library is an ordinary notebook, so the
+    // artifact goes to the library root while ordinary notes stay put.
+    const target = installation();
+    await restoreBackup(target, { ...backup, notebooks: legacyNotebooks });
+    const [targetLibrary] = activeLibraries(target.sqlite);
+    expect(targetLibrary).toBeDefined();
+    expect(targetLibrary).not.toBe(library.id);
+    expect(memoRow(target.sqlite, artifact.id).notebook_id).toBe(targetLibrary);
+    expect(memoRow(target.sqlite, ordinary.memo.id).notebook_id).toBe(ordinary.memo.notebookId);
+
+    // A note restored into an actual library folder goes to the inbox.
+    const withLibrary = installation();
+    await restoreBackup(withLibrary, { ...backup, memos: backup.memos.map((entry) => (entry.memo.id === ordinary.memo.id ? misplacedNote : entry)) });
+    const inbox = withLibrary.sqlite.query("SELECT id FROM notebooks WHERE workspace_id = ? AND slug = 'inbox'").get(WORKSPACE_ID).id;
+    expect(memoRow(withLibrary.sqlite, ordinary.memo.id).notebook_id).toBe(inbox);
+    expect(memoRow(withLibrary.sqlite, artifact.id).notebook_id).toBe(folder.id);
   });
 });
 
