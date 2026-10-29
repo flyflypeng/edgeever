@@ -36,6 +36,7 @@ const labels = {
     "current-date-time": "当前日期和时间",
     attachment: "上传附件",
     "note-link": "引用笔记",
+    "artifact-card": "制品卡片",
     "external-link": "插入超链接",
   },
 };
@@ -47,7 +48,7 @@ describe("slash command menu", () => {
     const unfilteredItems = filterSlashCommandItems(items, "");
     const heading6Index = unfilteredItems.findIndex((item) => item.id === "heading-6");
 
-    expect(unfilteredItems).toHaveLength(24);
+    expect(unfilteredItems).toHaveLength(25);
     expect(unfilteredItems.slice(heading6Index + 1, heading6Index + 4).map((item) => item.id)).toEqual([
       "current-date",
       "current-time",
@@ -89,6 +90,7 @@ describe("slash command menu", () => {
       "equation",
       "upload",
       "note",
+      "card",
       "link",
     ]);
     expect(items.every((item) => /^[a-z][a-z0-9]*$/.test(item.command))).toBe(true);

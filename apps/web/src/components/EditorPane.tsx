@@ -94,6 +94,7 @@ import {
   createNoteLinkSuggestionExtension,
   type NoteLinkSuggestionLabels,
 } from "./editor/NoteLinkSuggestion";
+import { ArtifactCardContext, ArtifactCardExtension, artifactCardLinkAttrs, type ArtifactCardContextValue } from "./editor/ArtifactCard";
 import { WeChatIcon } from "./WeChatIcon";
 import { useMarkdownTheme } from "./ThemeProvider";
 const MarkdownSourceEditor = lazy(() =>
@@ -154,6 +155,8 @@ import {
   type MemoEditSession,
   type TiptapDoc,
   createMemoLinkHref,
+  findArtifactLibrary,
+  getArtifactLibraryTreeIds,
   getAiDocumentFingerprint,
   isAiSelectionSnapshotCurrent,
   parseMemoLinkHref,
@@ -270,7 +273,7 @@ import { getEditorSaveChrome } from "./editor/editor-save-chrome";
 import { classifyEditorSaveFailure, shouldLeaveEditorAfterSaveError } from "./editor/editor-save-failure";
 import { useEditorSaveConflictActions } from "./editor/useEditorSaveConflictActions";
 import { useEditorNoteSearchController } from "./editor/useEditorNoteSearchController";
-import { EditorNoteLinkPicker } from "./editor/EditorNoteLinkPicker";
+import { EditorNoteLinkPicker, type EditorNoteLinkPickerMode } from "./editor/EditorNoteLinkPicker";
 import { EditorResourceDialogs } from "./editor/EditorResourceDialogs";
 import { EditorNoteSearchBar } from "./editor/EditorNoteSearchBar";
 import { EditorSaveRecoveryBanner } from "./editor/EditorSaveRecoveryBanner";
@@ -513,6 +516,7 @@ const RichEditorPane = ({
   const openNoteSearchFromSelectionRef = useRef<(text: string, showReplace?: boolean) => void>(() => undefined);
   const closeNoteReplaceRef = useRef<() => void>(() => undefined);
   const [noteLinkPickerOpen, setNoteLinkPickerOpen] = useState(false);
+  const [noteLinkPickerMode, setNoteLinkPickerMode] = useState<EditorNoteLinkPickerMode>("link");
   const [noteLinkQuery, setNoteLinkQuery] = useState("");
   const [noteLinkHintPosition, setNoteLinkHintPosition] = useState<NoteLinkHintPosition | null>(null);
   const [externalLinkDialogOpen, setExternalLinkDialogOpen] = useState(false);
@@ -609,9 +613,24 @@ const RichEditorPane = ({
       window.removeEventListener("storage", syncMode);
     };
   }, []);
+  const artifactLibraryId = useMemo(() => findArtifactLibrary(notebooks)?.id ?? null, [notebooks]);
+  const artifactLibraryTreeIds = useMemo(() => [...getArtifactLibraryTreeIds(notebooks)], [notebooks]);
   const noteLinkResultsQuery = useQuery({
-    queryKey: ["memo-link-search", noteLinkQuery],
-    queryFn: () => repository.listMemos({ q: noteLinkQuery, limit: 20 }),
+    queryKey: ["memo-link-search", noteLinkPickerMode, noteLinkQuery, artifactLibraryId, artifactLibraryTreeIds],
+    queryFn: async () => {
+      if (noteLinkPickerMode === "link") {
+        return (await repository.listMemos({ q: noteLinkQuery, limit: 20 })).memos;
+      }
+      // Card candidates come from the library itself: workspace-wide lists hide artifacts until the user searches.
+      if (!artifactLibraryId) return [];
+      const result = await repository.listMemos({
+        q: noteLinkQuery,
+        notebookId: artifactLibraryId,
+        notebookIds: artifactLibraryTreeIds,
+        limit: 20,
+      });
+      return result.memos.filter((candidate) => candidate.artifact);
+    },
     enabled: noteLinkPickerOpen,
   });
   const [editorScrollContainer, setEditorScrollContainer] = useState<HTMLDivElement | null>(null);
@@ -750,6 +769,7 @@ const RichEditorPane = ({
       "current-date-time": "",
       attachment: "",
       "note-link": "",
+      "artifact-card": "",
       "external-link": "",
     },
   });
@@ -786,6 +806,7 @@ const RichEditorPane = ({
       "current-date-time": t("slashMenu.items.currentDateTime"),
       attachment: t("editorToolbar.attachment"),
       "note-link": t("editorToolbar.noteLink"),
+      "artifact-card": t("htmlArtifact.cardInsert"),
       "external-link": t("editorToolbar.externalLink"),
     },
   };
@@ -795,7 +816,14 @@ const RichEditorPane = ({
       openAi: () => openAiAssistantRef.current(),
       openAttachmentPicker: () => fileInputRef.current?.click(),
       openExternalLinkPicker: () => openExternalLinkDialogRef.current(),
-      openNoteLinkPicker: () => setNoteLinkPickerOpen(true),
+      openNoteLinkPicker: () => {
+        setNoteLinkPickerMode("link");
+        setNoteLinkPickerOpen(true);
+      },
+      openArtifactCardPicker: () => {
+        setNoteLinkPickerMode("artifact-card");
+        setNoteLinkPickerOpen(true);
+      },
       openMathFormula: (kind, range) => openMathFormulaRef.current(kind, range),
     };
   }
@@ -811,12 +839,14 @@ const RichEditorPane = ({
     empty: "",
     close: "",
     untitled: "",
+    artifact: "",
   });
   noteLinkSuggestionLabelsRef.current = {
     menu: t("noteLinkPicker.title"),
     empty: t("noteLinkPicker.empty"),
     close: t("noteLinkPicker.close"),
     untitled: t("common.untitledMemo"),
+    artifact: t("htmlArtifact.name"),
   };
   const noteLinkSuggestionExtensionRef = useRef<ReturnType<typeof createNoteLinkSuggestionExtension> | null>(null);
   if (!noteLinkSuggestionExtensionRef.current) {
@@ -1290,6 +1320,7 @@ const RichEditorPane = ({
       }),
       slashCommandExtensionRef.current,
       noteLinkSuggestionExtensionRef.current,
+      ArtifactCardExtension,
     ],
     content: memo
       ? resolveMemoContentDoc(memo.contentJson, memo.contentMarkdown)
@@ -1584,6 +1615,36 @@ const RichEditorPane = ({
     setNoteLinkPickerOpen(false);
     setNoteLinkQuery("");
   }, [editor, effectiveReadOnly, memo?.id, t]);
+
+  const insertArtifactCard = useCallback((target: MemoSummary) => {
+    if (!isEditorReady(editor) || effectiveReadOnly || target.id === memo?.id) {
+      return;
+    }
+
+    // The card is its own paragraph; the empty one after it keeps typing outside the card.
+    editor
+      .chain()
+      .focus()
+      .insertContent([
+        {
+          type: "paragraph",
+          content: [{
+            type: "text",
+            text: getMemoDisplayTitle(target.title, t("common.untitledMemo")),
+            marks: [{ type: "link", attrs: artifactCardLinkAttrs(target.id) }],
+          }],
+        },
+        { type: "paragraph" },
+      ])
+      .run();
+    setNoteLinkPickerOpen(false);
+    setNoteLinkQuery("");
+  }, [editor, effectiveReadOnly, memo?.id, t]);
+
+  const artifactCardContext = useMemo<ArtifactCardContextValue>(() => ({
+    loadMemo: async (memoId) => (await repository.getMemo(memoId, true)).memo,
+    openMemo: (memoId) => onOpenMemo?.(memoId),
+  }), [onOpenMemo, repository]);
 
   const openExternalLinkDialog = useCallback(() => {
     if (effectiveReadOnly || !memo) {
@@ -1889,6 +1950,13 @@ const RichEditorPane = ({
   const handleEditorClickCapture = useCallback((event: ReactMouseEvent<HTMLDivElement>) => {
     const noteLink = getNoteLinkFromEventTarget(event.target);
     const memoId = parseMemoLinkHref(noteLink?.getAttribute("href"));
+    if (memoId && noteLink?.closest("[data-artifact-card]")?.querySelector('[data-artifact-card-state="unavailable"]')) {
+      // A card whose target is gone stays put instead of reporting an error.
+      event.preventDefault();
+      event.stopPropagation();
+      setNoteLinkHintPosition(null);
+      return;
+    }
     if (shouldOpenInternalNoteLink(event, memoId)) {
       event.preventDefault();
       event.stopPropagation();
@@ -4034,13 +4102,14 @@ const RichEditorPane = ({
       />
       {noteLinkPickerOpen && (
         <EditorNoteLinkPicker
+          mode={noteLinkPickerMode}
           query={noteLinkQuery}
           isLoading={noteLinkResultsQuery.isLoading}
-          memos={noteLinkResultsQuery.data?.memos ?? []}
+          memos={noteLinkResultsQuery.data ?? []}
           currentMemoId={memo.id}
           onQueryChange={setNoteLinkQuery}
           onClose={() => setNoteLinkPickerOpen(false)}
-          onInsert={insertMemoLink}
+          onInsert={noteLinkPickerMode === "artifact-card" ? insertArtifactCard : insertMemoLink}
         />
       )}
       <header className="shrink-0 border-b border-[var(--workspace-divider)] bg-transparent">
@@ -4486,7 +4555,10 @@ const RichEditorPane = ({
             onPickAttachment={() => fileInputRef.current?.click()}
             onPickExternalLink={openExternalLinkDialog}
             externalLinkActive={externalLinkActive}
-            onPickNoteLink={() => setNoteLinkPickerOpen(true)}
+            onPickNoteLink={() => {
+              setNoteLinkPickerMode("link");
+              setNoteLinkPickerOpen(true);
+            }}
             onPickMathFormula={() => openMathFormula()}
           />
         )}
@@ -4669,7 +4741,9 @@ const RichEditorPane = ({
                 </BubbleMenu>
                 <EditorTableContextMenu editor={editor} readOnly={effectiveReadOnly}>
                   <AttachmentTranscriptContext.Provider value={attachmentTranscriptContext}>
-                    <EditorContent editor={editor} />
+                    <ArtifactCardContext.Provider value={artifactCardContext}>
+                      <EditorContent editor={editor} />
+                    </ArtifactCardContext.Provider>
                   </AttachmentTranscriptContext.Provider>
                 </EditorTableContextMenu>
               </div>

@@ -1536,6 +1536,36 @@ html[data-edgeever-extension-theme] .edgeever-memo-divider {
   box-shadow: none;
 }
 
+/* Artifact card: a paragraph holding one card link, with the target's thumbnail above its title. */
+.ProseMirror p.edgeever-artifact-card-block {
+  width: min(100%, 20rem);
+  padding: 0.5rem;
+  border: 1px solid rgb(var(--slate-200-rgb));
+  border-radius: 0.75rem;
+  background: hsl(var(--card));
+}
+
+.ProseMirror p.edgeever-artifact-card-block .edgeever-artifact-card-preview {
+  display: block;
+  margin-bottom: 0.4rem;
+  user-select: none;
+}
+
+.ProseMirror p.edgeever-artifact-card-block a.edgeever-artifact-card {
+  display: flex;
+  max-width: 100%;
+  border: 0;
+  background: transparent;
+  padding: 0 0.15rem;
+  text-decoration: none;
+}
+
+.ProseMirror p.edgeever-artifact-card-block:has([data-artifact-card-state="unavailable"]) a.edgeever-artifact-card {
+  color: rgb(var(--slate-400-rgb));
+  text-decoration: line-through;
+  cursor: default;
+}
+
 .ProseMirror a.edgeever-attachment-link,
 .ProseMirror a[href*="/api/v1/resources/"] {
   display: inline-flex;
