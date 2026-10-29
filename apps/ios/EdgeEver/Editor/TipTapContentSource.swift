@@ -40,6 +40,12 @@ enum TipTapContentSource: Sendable {
                 let stripped = stripInfographicMarker(markdown)
                 return Decision(useJSON: false, payload: stripped, fingerprint: "infographic:\(stripped)")
             }
+            // HTML artifacts are never rendered here. The fallback body (thumbnail,
+            // pointer sentence, text excerpt) is what the viewer shows.
+            if isArtifact(markdown: markdown) {
+                let stripped = stripArtifactMarker(markdown)
+                return Decision(useJSON: false, payload: stripped, fingerprint: "artifact:\(stripped)")
+            }
             if jsonUsable {
                 if jsonHasImageWidth(json) {
                     return Decision(useJSON: true, payload: documentJSON, fingerprint: "json:\(json)")
@@ -78,6 +84,19 @@ enum TipTapContentSource: Sendable {
     static func stripInfographicMarker(_ markdown: String) -> String {
         markdown.replacingOccurrences(
             of: #"<!--\s*edgeever-infographic-v1:[\s\S]*?-->"#,
+            with: "",
+            options: .regularExpression
+        ).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Same marker test as `hasArtifactDocumentMarker` in packages/shared artifact.ts.
+    static func isArtifact(markdown: String) -> Bool {
+        markdown.contains("<!-- edgeever-artifact-v1:")
+    }
+
+    static func stripArtifactMarker(_ markdown: String) -> String {
+        markdown.replacingOccurrences(
+            of: #"<!--\s*edgeever-artifact-v1:[\s\S]*?-->"#,
             with: "",
             options: .regularExpression
         ).trimmingCharacters(in: .whitespacesAndNewlines)

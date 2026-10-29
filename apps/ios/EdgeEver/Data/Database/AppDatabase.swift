@@ -114,6 +114,12 @@ enum AppDatabase {
                 );
                 """)
         }
+        // Mirrored notebooks were stored before `Notebook.systemKind` was decoded, so
+        // the Artifact Library looks like an ordinary notebook. Dropping the cursor
+        // makes the next sync bootstrap again; local drafts and the outbox stay.
+        migrator.registerMigration("v2_resync_notebook_system_kind") { db in
+            try db.execute(sql: "DELETE FROM mobile_sync_meta WHERE key IN ('cursor', 'identity')")
+        }
         return migrator
     }
 }

@@ -131,7 +131,7 @@ struct WorkspaceView: View {
             }) {
                 MemoEditView(
                     mode: .create(
-                        notebookId: store.selectedNotebookId ?? store.notebooks.first?.id ?? "",
+                        notebookId: store.createNotebookId,
                         seed: createPresentation.current?.seed
                     ),
                     initialSharedImages: createPresentation.current?.sharedImages ?? [],
@@ -194,7 +194,7 @@ struct WorkspaceView: View {
                 .presentationDetents([.medium, .large])
             }
             .sheet(isPresented: $showMoveSheet) {
-                MoveNotebookSheet(notebooks: store.notebooks) { notebookId in
+                MoveNotebookSheet(notebooks: store.moveTargets) { notebookId in
                     Task {
                         await store.moveSelection(env: env, notebookId: notebookId)
                         showMoveSheet = false
@@ -1029,9 +1029,10 @@ struct SelectionMoreSheet: View {
             selectionAction(
                 icon: "square.and.arrow.up",
                 label: env.preferences.t("分享笔记", en: "Share note", pl: "Udostępnij notatkę"),
-                disabled: shareableMemo == nil
+                // Public sharing refuses artifacts (`artifact_share_unsupported`).
+                disabled: shareableMemo.map { store.isInArtifactLibrary($0) } ?? true
             ) {
-                guard let memo = shareableMemo else { return }
+                guard let memo = shareableMemo, !store.isInArtifactLibrary(memo) else { return }
                 dismiss()
                 onShare(memo)
             }

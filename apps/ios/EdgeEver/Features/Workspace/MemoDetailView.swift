@@ -111,7 +111,8 @@ struct MemoDetailView: View {
         .sheet(item: $resourceTarget) { target in
             ResourceActionSheet(
                 target: target,
-                canMutate: memo.map { !$0.isDeleted && !$0.id.hasPrefix("local:") } ?? false,
+                // An artifact's thumbnail is managed by the server; renaming or deleting it breaks the card.
+                canMutate: memo.map { !$0.isDeleted && !$0.id.hasPrefix("local:") && !isHtmlArtifact($0) } ?? false,
                 onContentChanged: { load() }
             )
             .presentationDetents([.height(360), .medium])
@@ -319,7 +320,10 @@ struct MemoDetailView: View {
         }
         .sheet(isPresented: $showNotebookPicker) {
             EditNotebookPickerSheet(
-                notebooks: availableNotebooks,
+                notebooks: NotebookHierarchy.locationTargets(
+                    notebooks: availableNotebooks,
+                    forArtifact: memo.map { isHtmlArtifact($0) } ?? false
+                ),
                 selectedId: memo?.notebookId ?? ""
             ) { notebookId in
                 showNotebookPicker = false
@@ -374,8 +378,11 @@ struct MemoDetailView: View {
                         pinPulse.toggle()
                     }
                 }
-                Button(env.preferences.t("分享链接", en: "Share link", pl: "Udostępnij link")) {
-                    Task { await shareMemo(memo) }
+                if !isHtmlArtifact(memo) {
+                    // Public sharing refuses artifacts (`artifact_share_unsupported`).
+                    Button(env.preferences.t("分享链接", en: "Share link", pl: "Udostępnij link")) {
+                        Task { await shareMemo(memo) }
+                    }
                 }
                 Button(
                     imageExporting
@@ -515,12 +522,14 @@ struct MemoDetailView: View {
                 .accessibilityIdentifier(DetailMemoChrome.syncStatus)
 
                 if let memo, !memo.isDeleted {
-                    headerIconButton(
-                        systemImage: "square.and.arrow.up",
-                        label: env.preferences.t("分享笔记", en: "Share note", pl: "Udostępnij notatkę"),
-                        id: DetailMemoChrome.share
-                    ) {
-                        Task { await shareMemo(memo) }
+                    if !isHtmlArtifact(memo) {
+                        headerIconButton(
+                            systemImage: "square.and.arrow.up",
+                            label: env.preferences.t("分享笔记", en: "Share note", pl: "Udostępnij notatkę"),
+                            id: DetailMemoChrome.share
+                        ) {
+                            Task { await shareMemo(memo) }
+                        }
                     }
                     headerIconButton(
                         systemImage: "clock.arrow.circlepath",
@@ -773,6 +782,11 @@ struct MemoDetailView: View {
                     .foregroundStyle(AppTheme.muted)
                     .padding(.top, 4)
                     .textSelection(.enabled)
+
+                    if isHtmlArtifact(memo) {
+                        artifactViewHint
+                            .padding(.top, 10)
+                    }
                 }
 
                 if searchOpen {
@@ -990,14 +1004,18 @@ struct MemoDetailView: View {
             }
             .buttonStyle(.plain)
             .disabled(memo.isDeleted || blocksRichTextEdit(memo))
-            .accessibilityLabel(isInfographic(memo)
+            .accessibilityLabel(isHtmlArtifact(memo)
+                ? env.preferences.t("HTML 制品标题", en: "HTML artifact title", pl: "Tytuł artefaktu HTML")
+                : isInfographic(memo)
                 ? env.preferences.t("信息图标题", en: "Infographic title", pl: "Tytuł infografiki")
                 : isStructuredTable(memo)
                 ? env.preferences.t("表格标题", en: "Database title", pl: "Tytuł bazy danych")
                 : isVisualDiagram(memo)
                 ? env.preferences.t("图表标题", en: "Diagram title", pl: "Tytuł diagramu")
                 : env.preferences.t("编辑笔记标题", en: "Edit note title", pl: "Edytuj tytuł notatki"))
-            .accessibilityHint(memo.contentMarkdown.contains("<!-- edgeever-poster-v1:")
+            .accessibilityHint(isHtmlArtifact(memo)
+                ? env.preferences.t("请在 Web 或桌面端查看可交互内容", en: "Open it on the web or desktop to view the interactive content", pl: "Otwórz w wersji webowej lub desktopowej, aby zobaczyć interaktywną treść")
+                : memo.contentMarkdown.contains("<!-- edgeever-poster-v1:")
                 ? env.preferences.t("海报请在 Web 或桌面端编辑", en: "Edit posters on Web or desktop", pl: "Plakaty edytuj w wersji webowej lub desktopowej")
                 : isInfographic(memo)
                 ? env.preferences.t("信息图请在 Web 或桌面端编辑", en: "Edit infographics on Web or desktop", pl: "Infografiki edytuj w wersji webowej lub desktopowej")
@@ -1034,8 +1052,37 @@ struct MemoDetailView: View {
         memo.contentMarkdown.contains("<!-- edgeever-infographic-v1:")
     }
 
+    /// HTML artifacts show only their fallback body here (thumbnail, pointer, excerpt).
+    private func isHtmlArtifact(_ memo: MemoDetail) -> Bool {
+        TipTapContentSource.isArtifact(markdown: memo.contentMarkdown)
+    }
+
     private func blocksRichTextEdit(_ memo: MemoDetail) -> Bool {
         isVisualDiagram(memo) || isStructuredTable(memo) || isInfographic(memo) || memo.contentMarkdown.contains("<!-- edgeever-poster-v1:")
+            || isHtmlArtifact(memo)
+    }
+
+    private var artifactViewHint: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "macwindow")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(AppTheme.secondary)
+            Text(env.preferences.t(
+                "请在 Web 或桌面端查看可交互内容",
+                en: "Open it on the web or desktop to view the interactive content",
+                pl: "Otwórz w wersji webowej lub desktopowej, aby zobaczyć interaktywną treść"
+            ))
+            .font(.system(size: 13))
+            .foregroundStyle(AppTheme.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(AppTheme.background)
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(AppTheme.border, lineWidth: 1))
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier(DetailMemoChrome.artifactHint)
     }
 
     private func refreshSyncStatus() {
@@ -1091,6 +1138,10 @@ struct MemoDetailView: View {
         guard !memo.isDeleted else { return }
         guard !notebookId.isEmpty, notebookId != memo.notebookId else { return }
         guard let scope = env.session.dataScope else { return }
+        if isHtmlArtifact(memo) {
+            await moveArtifactToFolder(memo, folderId: notebookId, scope: scope)
+            return
+        }
         let revision = memo.revision
         let contentHash = memo.contentHash
         var updated = memo
@@ -1118,6 +1169,28 @@ struct MemoDetailView: View {
         } catch {
             self.error = error.localizedDescription
             load()
+        }
+    }
+
+    /// The server refuses any artifact save that carries a body (`artifact_update_required`),
+    /// and the outbox always sends one, so the folder change goes straight to the server.
+    private func moveArtifactToFolder(_ memo: MemoDetail, folderId: String, scope: String) async {
+        do {
+            let updated = try await env.session.client.updateMemo(
+                id: memo.id,
+                expectedRevision: memo.revision,
+                expectedContentHash: nil,
+                editSessionId: nil,
+                notebookId: folderId,
+                title: nil,
+                isPinned: nil,
+                contentMarkdown: nil,
+                tags: nil
+            )
+            try env.mirror.upsertMemo(scope: scope, memo: updated)
+            self.memo = updated
+        } catch {
+            self.error = error.localizedDescription
         }
     }
 

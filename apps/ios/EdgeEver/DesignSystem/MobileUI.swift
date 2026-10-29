@@ -126,6 +126,30 @@ enum NotebookHierarchy {
         includeDescendants ? descendantIds(notebooks: notebooks, targetNotebookId: targetNotebookId) : [targetNotebookId]
     }
 
+    /// Port of `getArtifactLibraryTreeIds`: the Artifact Library and its folders.
+    static func artifactLibraryTreeIds(notebooks: [Notebook]) -> Set<String> {
+        guard let library = notebooks.first(where: \.isArtifactLibrary) else { return [] }
+        return Set(descendantIds(notebooks: notebooks, targetNotebookId: library.id))
+    }
+
+    /// Where a memo may live: artifacts only inside the library tree, notes only outside it
+    /// (server rule `artifact_location_invalid`).
+    static func locationTargets(notebooks: [Notebook], forArtifact: Bool) -> [Notebook] {
+        let libraryIds = artifactLibraryTreeIds(notebooks: notebooks)
+        return notebooks.filter { libraryIds.contains($0.id) == forArtifact }
+    }
+
+    /// Notebook a new note goes to: the selected notebook, unless it is in the
+    /// library tree, where notes cannot be created; then the inbox (web parity).
+    static func createNotebookId(notebooks: [Notebook], selectedNotebookId: String?) -> String {
+        let targets = locationTargets(notebooks: notebooks, forArtifact: false)
+        if let selectedNotebookId, targets.contains(where: { $0.id == selectedNotebookId }) {
+            return selectedNotebookId
+        }
+        let inbox = targets.first { $0.slug == "inbox" || $0.id == "nb_inbox" || $0.id.hasSuffix("_inbox") }
+        return inbox?.id ?? targets.first?.id ?? ""
+    }
+
     /// Port of `getNotebookDescendantMemoCount`: notes in sub-notebooks, not the notebook itself.
     /// Expects direct per-notebook counts, as `LocalMirrorRepository.listNotebooks` returns them.
     static func descendantMemoCount(notebooks: [Notebook], targetNotebookId: String) -> Int {

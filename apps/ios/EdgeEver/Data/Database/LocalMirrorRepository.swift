@@ -114,10 +114,21 @@ final class LocalMirrorRepository: @unchecked Sendable {
                 conditions.append("notebook_id = ?")
                 arguments.append(notebookId)
             }
-            if let q = params.q?.trimmingCharacters(in: .whitespacesAndNewlines), !q.isEmpty {
+            let q = params.q?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if !q.isEmpty {
                 conditions.append("(title LIKE ? OR content_text LIKE ? OR tags_text LIKE ?)")
                 let pattern = "%\(q)%"
                 arguments.append(contentsOf: [pattern, pattern, pattern])
+            }
+            // Server list rule: the workspace-wide "All notes" list leaves out the
+            // Artifact Library tree; notebook, search, tag and trash views keep it.
+            let hasTag = !(params.tag?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "").isEmpty
+            if (params.notebookIds ?? []).isEmpty, params.notebookId == nil, q.isEmpty, !hasTag, !params.trash {
+                let libraryIds = try artifactLibraryTreeIds(db, scope: scope)
+                if !libraryIds.isEmpty {
+                    conditions.append("notebook_id NOT IN (\(libraryIds.map { _ in "?" }.joined(separator: ",")))")
+                    arguments.append(contentsOf: libraryIds)
+                }
             }
             switch params.filter {
             case .all: break
@@ -345,6 +356,16 @@ final class LocalMirrorRepository: @unchecked Sendable {
                 arguments: [scope, String(cursor)]
             )
         }
+    }
+
+    private func artifactLibraryTreeIds(_ db: Database, scope: String) throws -> [String] {
+        let rows = try String.fetchAll(
+            db,
+            sql: "SELECT data_json FROM mobile_notebooks WHERE scope = ?",
+            arguments: [scope]
+        )
+        let notebooks = rows.compactMap { try? EdgeEverJSON.decoder.decode(Notebook.self, from: Data($0.utf8)) }
+        return Array(NotebookHierarchy.artifactLibraryTreeIds(notebooks: notebooks))
     }
 
     // MARK: - Private upserts
