@@ -1,4 +1,3 @@
-import { hasPosterDocumentMarker, parsePosterDocument } from "@edgeever/shared";
 import {
   createExcerpt,
   DEFAULT_MEMO_TITLE,
@@ -26,6 +25,7 @@ import { auditStatement } from "./audit";
 import type { AppContext, AuditActor, AuthContext, Bindings } from "./api-context";
 import { AppError } from "./app-error";
 import { clampNumber, createId, isoNow, parseJsonArray } from "./entity-utils";
+import { findSaveContentRejection } from "./envelope-content-guards";
 import { workspaceInboxId } from "./notebook-service";
 import { sha256 } from "./hash-utils";
 import { getRequiredString } from "./mcp-json-rpc";
@@ -1357,21 +1357,10 @@ export const updateMemoRecord = async (
   const tags = input.tags === undefined ? parseJsonArray(current.tags_json) : normalizeTags(input.tags);
   const excerpt = createExcerpt(contentText);
   const notebookId = input.notebookId ?? current.notebook_id;
-  if (hasPosterDocumentMarker(current.content_markdown) && !parsePosterDocument(contentMarkdown)) {
-    return { error: "poster_update_required", message: "Poster source must be edited on a supported client.", status: 409 };
-  }
-  if (hasPosterDocumentMarker(contentMarkdown) && !parsePosterDocument(contentMarkdown)) {
-    return { error: "invalid_poster", message: "Invalid poster source.", status: 400 };
-  }
+  const contentRejection = findSaveContentRejection(current.content_markdown, contentMarkdown);
+  if (contentRejection) return contentRejection;
   const currentTable = parseTableDocument(current.content_markdown);
   const nextTable = parseTableDocument(contentMarkdown);
-  if (currentTable && !nextTable) {
-    return {
-      error: "table_update_required",
-      message: "Structured table content must stay a structured table.",
-      status: 409,
-    };
-  }
   const removedAttachmentIds = currentTable && nextTable
     ? [...listTableAttachmentResourceIds(currentTable)].filter((resourceId) => !listTableAttachmentResourceIds(nextTable).has(resourceId))
     : [];
