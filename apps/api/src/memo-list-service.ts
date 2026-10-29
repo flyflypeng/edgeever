@@ -7,6 +7,7 @@ import {
   getInfographicSummary,
   getPosterSummary,
   getTableSummary,
+  getArtifactSummary,
   type MemoActivityItem,
   type MemoSummary,
 } from "@edgeever/shared";
@@ -100,6 +101,7 @@ export const mapMemoSummary = (row: MemoSummaryRow): MemoSummary => ({
   ...getPosterSummary(row.content_markdown),
   ...(row.is_poster !== undefined ? { poster: Boolean(row.is_poster) } : {}),
   ...getTableSummary(row.content_markdown),
+  ...getArtifactSummary(row.content_markdown),
   tags: parseJsonArray(row.tags_json),
   isPinned: Boolean(row.is_pinned),
   isArchived: Boolean(row.is_archived),

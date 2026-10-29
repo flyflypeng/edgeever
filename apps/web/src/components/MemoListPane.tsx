@@ -68,7 +68,7 @@ import { ClipboardCopyNotice } from "./ClipboardCopyNotice";
 import { WeChatCopyProgress } from "./WeChatCopyProgress";
 import { cn } from "@/lib/utils";
 import { WORKSPACE_PAGE_TITLE_CLASSNAME } from "@/lib/workspace-ui";
-import type { Notebook, MemoSummary } from "@edgeever/shared";
+import { getArtifactLibraryTreeIds, type Notebook, type MemoSummary } from "@edgeever/shared";
 import { toggleMobileMemoFilterMode } from "@edgeever/shared/mobile-ui";
 import type {
   MemoFilterMode,
@@ -525,7 +525,11 @@ export const MemoListPane = ({
   const memoSortOptions = useMemo(() => getMemoSortOptions(t), [t]);
   const mobileFilterOptions = useMemo(() => filterOptions.filter((option: any) => option.value !== "all"), [filterOptions]);
   const visibleMemoIds = useMemo(() => memos.map((memo) => memo.id), [memos]);
-  const moveNotebookOptions = useMemo(() => getNotebookMoveOptions(notebooks), [notebooks]);
+  // Inside the Artifact Library, memos can only move between artifact folders.
+  const moveNotebookOptions = useMemo(
+    () => getNotebookMoveOptions(notebooks, notebook && getArtifactLibraryTreeIds(notebooks).has(notebook.id) ? "artifacts" : "notes"),
+    [notebook, notebooks],
+  );
   const selectedMemosInList = useMemo(() => memos.filter((memo) => selectedMemoIds.has(memo.id)), [memos, selectedMemoIds]);
 
   const searchInputRef = useRef<HTMLInputElement | null>(null);
@@ -664,7 +668,7 @@ export const MemoListPane = ({
 
   const handleCopyContextMemoToWeChat = async () => {
     const memo = memoContextMenu?.memo;
-    if (!memo || memo.diagramKind || memo.structuredTable || memo.infographic || memo.poster || wechatCopyPendingRef.current) return;
+    if (!memo || memo.diagramKind || memo.structuredTable || memo.infographic || memo.poster || memo.artifact || wechatCopyPendingRef.current) return;
     setMemoContextMenu(null);
     wechatCopyPendingRef.current = true;
     if (wechatCopyNoticeTimerRef.current !== null) {
@@ -1658,7 +1662,7 @@ export const MemoListPane = ({
                     {t(isLocalMemoId(memoContextMenu.memo.id) ? "sharing.afterSync" : contextShareQuery.data?.share ? "sharing.manage" : "sharing.action")}
                   </DropdownMenuItem>
                   {!isLocalMemoId(memoContextMenu.memo.id) && <MemoNotebookSites key={memoContextMenu.memo.id} memoId={memoContextMenu.memo.id} presentation="menu" />}
-                  {!memoContextMenu.memo.diagramKind && !memoContextMenu.memo.structuredTable && !memoContextMenu.memo.infographic && !memoContextMenu.memo.poster && (
+                  {!memoContextMenu.memo.diagramKind && !memoContextMenu.memo.structuredTable && !memoContextMenu.memo.infographic && !memoContextMenu.memo.poster && !memoContextMenu.memo.artifact && (
                     <DropdownMenuItem
                       className="flex h-9 w-full items-center gap-2 px-3 text-left text-xs text-slate-700 hover:bg-slate-50 cursor-pointer outline-none"
                       onClick={() => void handleCopyContextMemoToWeChat()}

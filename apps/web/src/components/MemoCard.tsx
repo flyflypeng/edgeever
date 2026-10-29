@@ -1,6 +1,6 @@
 import { useRef, useState, useEffect, type DragEvent, type MouseEvent, type PointerEvent as ReactPointerEvent, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { useTranslation } from "react-i18next";
-import { FileText, Component, GitFork, PieChart, Table2, Workflow, Star, Check, MoreHorizontal, RotateCcw, Trash2 } from "lucide-react";
+import { FileCode2, FileText, Component, GitFork, PieChart, Table2, Workflow, Star, Check, MoreHorizontal, RotateCcw, Trash2 } from "lucide-react";
 import { getMemoListTimestamp, type MemoSummary } from "@edgeever/shared";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
@@ -413,6 +413,12 @@ export const MemoCard = ({
               {listDensity !== "compact" && memo.diagramPreview?.labels.length ? (
                 <div className="line-clamp-2 text-xs leading-relaxed text-slate-600">{memo.diagramPreview.labels.join(" · ")}</div>
               ) : null}
+            </div>
+          ) : memo.artifact ? (
+            // Thumbnails arrive with card style B; until then every artifact shows the placeholder.
+            <div className="space-y-1.5">
+              <div className="aspect-[16/10] w-full rounded-md bg-slate-100" data-artifact-thumbnail-placeholder aria-hidden="true" />
+              <div className="flex items-center gap-1.5 text-xs text-slate-500"><FileCode2 className="h-3.5 w-3.5" aria-hidden="true" /><span>{t("htmlArtifact.name")}</span></div>
             </div>
           ) : memo.poster ? (
             <div className="flex items-center gap-1.5 text-xs text-slate-500"><FileText className="h-3.5 w-3.5" aria-hidden="true" /><span>{t("poster.name")}</span></div>

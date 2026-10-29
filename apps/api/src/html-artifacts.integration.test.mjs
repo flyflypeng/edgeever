@@ -1,0 +1,198 @@
+import { afterEach, describe, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
+import { globSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { callMcpTool, fetchEdgeEverApp } from "./index.ts";
+import { createSelfHostedStorageAdapter } from "./self-hosted-storage-adapter.ts";
+
+// An HTML Artifact is a memo in the Artifact Library. Its HTML is stored as a
+// text/html resource; the memo body carries only the envelope and fallback text.
+const MiB = 1024 * 1024;
+const cleanups = [];
+afterEach(() => cleanups.splice(0).reverse().forEach((cleanup) => cleanup()));
+
+const installation = () => {
+  const sqlite = new Database(":memory:");
+  sqlite.exec("PRAGMA foreign_keys = ON");
+  for (const file of globSync("migrations/*.sql").sort()) sqlite.exec(readFileSync(file, "utf8"));
+  const resourcesDirectory = mkdtempSync(join(tmpdir(), "edgeever-html-artifacts-"));
+  cleanups.push(() => {
+    sqlite.close();
+    rmSync(resourcesDirectory, { recursive: true, force: true });
+  });
+  const storage = createSelfHostedStorageAdapter(sqlite, resourcesDirectory);
+  const environment = { storage, EDGE_EVER_ALLOW_UNAUTHENTICATED: "true", EDGE_EVER_RUNTIME: "self-hosted-bun" };
+  const send = async (method, path, init = {}) => {
+    const response = await fetchEdgeEverApp(
+      new Request(`http://edgeever.test${path}`, { method, ...init }),
+      environment,
+      { waitUntil: () => undefined, passThroughOnException: () => undefined },
+    );
+    const type = response.headers.get("Content-Type") ?? "";
+    return { status: response.status, headers: response.headers, body: type.includes("json") ? await response.json() : await response.text() };
+  };
+  const request = (method, path, body) => send(method, path, body === undefined
+    ? {}
+    : { headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const importArtifact = (file, fields = {}) => {
+    const form = new FormData();
+    if (file) form.append("file", file);
+    for (const [key, value] of Object.entries(fields)) form.append(key, value);
+    return send("POST", "/api/v1/artifacts", { body: form });
+  };
+  const ensureLibrary = async () => (await request("POST", "/api/v1/artifact-library", { locale: "en-US" })).body.notebook;
+  const inboxId = async () => (await request("GET", "/api/v1/notebooks")).body.notebooks.find((notebook) => notebook.slug === "inbox").id;
+  const saveBody = async (memoId, payload) => {
+    const { body } = await request("POST", `/api/v1/memos/${memoId}/edit-sessions`);
+    return request("PATCH", `/api/v1/memos/${memoId}`, {
+      ...payload,
+      editSessionId: body.editSession.id,
+      expectedRevision: body.editSession.baseRevision,
+      expectedContentHash: body.editSession.baseContentHash,
+    });
+  };
+  const agentAuth = {
+    kind: "agent", actorType: "agent", actorId: "tok_agent", username: "agent", displayName: null,
+    scopes: ["read:memos", "write:memos"], workspaceId: "ws_default", role: "owner",
+  };
+  const callTool = (name, args) => callMcpTool(
+    { env: environment, get: (key) => (key === "auth" ? agentAuth : undefined) },
+    agentAuth,
+    name,
+    args,
+  );
+  const resourcesOf = async (memoId) =>
+    (await request("GET", "/api/v1/resources")).body.resources.filter((resource) => resource.memoId === memoId);
+  return { request, send, importArtifact, ensureLibrary, inboxId, saveBody, callTool, resourcesOf };
+};
+
+const htmlFile = (html, name = "report.html", type = "text/html") => new File([html], name, { type });
+
+describe("import an HTML artifact", () => {
+  test("stores the HTML as a text/html resource and keeps only the envelope and fallback text in the body", async () => {
+    const env = installation();
+    const html = `<!doctype html><html><head><title>Q3 &amp; Q4 dashboard</title><style>.secret-style{}</style></head>
+      <body><h1>Revenue overview</h1><script>const secretScript = 1;</script><p>Visible&nbsp;paragraph</p></body></html>`;
+
+    const created = await env.importArtifact(htmlFile(html, "dashboard.html"));
+
+    expect(created.status).toBe(201);
+    const memo = created.body.memo;
+    const library = await env.ensureLibrary();
+    expect(memo).toMatchObject({ title: "Q3 & Q4 dashboard", notebookId: library.id, artifact: { kind: "html", thumbnailStale: true } });
+    expect(memo.contentMarkdown).toContain("<!-- edgeever-artifact-v1:");
+    expect(memo.contentMarkdown).not.toContain("<h1>");
+    expect(memo.contentMarkdown).not.toContain("secretScript");
+
+    const resources = await env.resourcesOf(memo.id);
+    expect(resources).toHaveLength(1);
+    expect(resources[0]).toMatchObject({ kind: "attachment", mimeType: "text/html", filename: "dashboard.html" });
+    const blob = await env.send("GET", `/api/v1/resources/${resources[0].id}/blob`);
+    expect(blob.status).toBe(200);
+    expect(blob.body).toBe(html);
+    expect(blob.headers.get("Content-Disposition")).toStartWith("attachment");
+
+    const listed = (await env.request("GET", `/api/v1/memos?notebookId=${library.id}`)).body.memos;
+    expect(listed.map((item) => [item.id, item.artifact?.kind])).toEqual([[memo.id, "html"]]);
+  });
+
+  test("uses the file name when the page has no title and imports into a chosen artifact folder", async () => {
+    const env = installation();
+    const library = await env.ensureLibrary();
+    const folder = (await env.request("POST", "/api/v1/notebooks", { name: "Project", parentId: library.id })).body.notebook;
+
+    const created = await env.importArtifact(htmlFile("<p>No title here</p>", "architecture-notes.htm"), {
+      folderId: folder.id,
+      tags: JSON.stringify(["agent", "arch"]),
+    });
+
+    expect(created.status).toBe(201);
+    expect(created.body.memo).toMatchObject({ title: "architecture-notes", notebookId: folder.id, tags: ["agent", "arch"] });
+  });
+
+  test("rejects files that are not non-empty UTF-8 .html/.htm pages and folders outside the library", async () => {
+    const env = installation();
+    const rejected = async (file, fields) => {
+      const response = await env.importArtifact(file, fields);
+      return [response.status, response.body.error?.code];
+    };
+
+    expect(await rejected(htmlFile("<p>x</p>", "notes.txt", "text/plain"))).toEqual([400, "artifact_invalid_html"]);
+    expect(await rejected(htmlFile("   \n", "empty.html"))).toEqual([400, "artifact_invalid_html"]);
+    expect(await rejected(htmlFile(new Uint8Array([0x3c, 0x70, 0x3e, 0xff, 0xfe, 0x3c]), "latin1.html"))).toEqual([400, "artifact_invalid_html"]);
+    expect(await rejected(htmlFile("<p>x</p>"), { folderId: await env.inboxId() })).toEqual([400, "artifact_location_invalid"]);
+    expect(await rejected(undefined)).toEqual([400, "bad_request"]);
+  });
+
+  test("accepts exactly 20 MB and rejects anything larger with 413", async () => {
+    const env = installation();
+    const page = (bytes) => {
+      const head = "<html><body>";
+      const tail = "</body></html>";
+      return htmlFile(head + "a".repeat(bytes - head.length - tail.length) + tail, "big.html");
+    };
+
+    expect((await env.importArtifact(page(20 * MiB))).status).toBe(201);
+    const tooLarge = await env.importArtifact(page(20 * MiB + 1));
+    expect(tooLarge).toMatchObject({ status: 413, body: { error: { code: "artifact_too_large" } } });
+  });
+
+  test("search finds visible page text, never script or style text, and indexes at most 200 KB", async () => {
+    const env = installation();
+    const library = await env.ensureLibrary();
+    const filler = "filler ".repeat(40 * 1024);
+    const html = `<html><head><style>.zebrastyle{}</style><script>var quokkascript = 1;</script></head>
+      <body><p>pangolin visible</p><!-- narwhalcomment --><noscript>wombatnoscript</noscript><p>${filler}</p><p>axolotltail</p></body></html>`;
+    const memoId = (await env.importArtifact(htmlFile(html))).body.memo.id;
+    const search = async (q) => (await env.request("GET", `/api/v1/memos?notebookId=${library.id}&q=${q}`)).body.memos.map((memo) => memo.id);
+
+    expect(await search("pangolin")).toEqual([memoId]);
+    for (const hidden of ["quokkascript", "zebrastyle", "narwhalcomment", "wombatnoscript"]) expect(await search(hidden)).toEqual([]);
+    // The text after the first 200 KB is cut from the index, not from the page.
+    expect(await search("axolotltail")).toEqual([]);
+    const detail = (await env.request("GET", `/api/v1/memos/${memoId}`)).body.memo;
+    expect(new TextEncoder().encode(detail.contentText).byteLength).toBeLessThanOrEqual(200 * 1024);
+    expect(detail.contentText.startsWith("pangolin visible filler")).toBe(true);
+  });
+});
+
+describe("artifact content and location rules", () => {
+  test("ordinary saves and MCP update_memo cannot change the body; title, tags, pin and moves in the library still save", async () => {
+    const env = installation();
+    const library = await env.ensureLibrary();
+    const folder = (await env.request("POST", "/api/v1/notebooks", { name: "Folder", parentId: library.id })).body.notebook;
+    const memo = (await env.importArtifact(htmlFile("<title>Page</title><p>Body</p>"))).body.memo;
+
+    // Even resending the stored body unchanged counts as a body update.
+    for (const payload of [{ contentMarkdown: "plain text from an old client" }, { contentMarkdown: memo.contentMarkdown }, { contentJson: memo.contentJson }]) {
+      expect(await env.saveBody(memo.id, payload)).toMatchObject({ status: 409, body: { error: { code: "artifact_update_required" } } });
+    }
+    await expect(env.callTool("update_memo", { memoId: memo.id, contentMarkdown: "agent text" }))
+      .rejects.toMatchObject({ code: "artifact_update_required", status: 409 });
+
+    const renamed = await env.request("PATCH", `/api/v1/memos/${memo.id}`, { title: "Renamed page", tags: ["kept"], isPinned: true, notebookId: folder.id });
+    expect(renamed.status).toBe(200);
+    expect(renamed.body.memo).toMatchObject({ title: "Renamed page", tags: ["kept"], isPinned: true, notebookId: folder.id, contentMarkdown: memo.contentMarkdown });
+    expect((await env.request("POST", "/api/v1/memos/batch/move", { memoIds: [memo.id], notebookId: library.id })).status).toBe(200);
+    expect((await env.request("GET", `/api/v1/memos/${memo.id}`)).body.memo.contentText).toBe("Page Body");
+  });
+
+  test("notes cannot enter the Artifact Library and artifacts cannot leave it", async () => {
+    const env = installation();
+    const library = await env.ensureLibrary();
+    const inboxId = await env.inboxId();
+    const artifact = (await env.importArtifact(htmlFile("<p>page</p>"))).body.memo;
+    const note = (await env.request("POST", "/api/v1/memos", { notebookId: inboxId, title: "Note", contentMarkdown: "hello" })).body.memo;
+    const invalid = { status: 400, body: { error: { code: "artifact_location_invalid" } } };
+
+    expect(await env.request("POST", "/api/v1/memos", { notebookId: library.id, title: "Note", contentMarkdown: "x" })).toMatchObject(invalid);
+    expect(await env.request("PATCH", `/api/v1/memos/${note.id}`, { notebookId: library.id })).toMatchObject(invalid);
+    expect(await env.request("POST", "/api/v1/memos/batch/move", { memoIds: [note.id], notebookId: library.id })).toMatchObject(invalid);
+    expect(await env.request("PATCH", `/api/v1/memos/${artifact.id}`, { notebookId: inboxId })).toMatchObject(invalid);
+    expect(await env.request("POST", "/api/v1/memos/batch/move", { memoIds: [artifact.id], notebookId: inboxId })).toMatchObject(invalid);
+
+    expect((await env.request("GET", `/api/v1/memos/${note.id}`)).body.memo.notebookId).toBe(inboxId);
+    expect((await env.request("GET", `/api/v1/memos/${artifact.id}`)).body.memo.notebookId).toBe(library.id);
+  });
+});

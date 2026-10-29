@@ -489,7 +489,26 @@ export const findArtifactLibraryAncestorId = async (db: DatabaseAdapter, workspa
   return row?.id ?? null;
 };
 
-const findArtifactLibrary = async (db: DatabaseAdapter, workspaceId: string) => {
+/**
+ * Artifacts live only inside the Artifact Library and ordinary memos only
+ * outside it. Throws `artifact_location_invalid` when a memo would cross over.
+ */
+export const MEMO_LOCATION_INVALID = {
+  error: "artifact_location_invalid",
+  message: "Artifacts stay inside the Artifact Library and notes stay outside it.",
+  status: 400,
+} as const;
+
+export const isMemoLocationAllowed = async (db: DatabaseAdapter, workspaceId: string, notebookId: string, isArtifact: boolean) =>
+  Boolean(await findArtifactLibraryAncestorId(db, workspaceId, notebookId)) === isArtifact;
+
+export const assertMemoLocation = async (db: DatabaseAdapter, workspaceId: string, notebookId: string, isArtifact: boolean) => {
+  if (!(await isMemoLocationAllowed(db, workspaceId, notebookId, isArtifact))) {
+    throw new AppError(MEMO_LOCATION_INVALID.error, MEMO_LOCATION_INVALID.message, MEMO_LOCATION_INVALID.status);
+  }
+};
+
+export const findArtifactLibrary = async (db: DatabaseAdapter, workspaceId: string) => {
   const row = await db.prepare(
     `SELECT id FROM notebooks WHERE workspace_id = ? AND system_kind = ? AND is_deleted = 0`
   ).bind(workspaceId, ARTIFACT_LIBRARY_SYSTEM_KIND).first<{ id: string }>();
