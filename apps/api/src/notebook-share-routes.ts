@@ -34,7 +34,8 @@ import { allowPasswordProtectedShare, setShareAccessCookie } from "./share-http-
 import { isShareUnlockBlocked, nextShareUnlockFailure, type ShareUnlockState } from "./share-access";
 import { encryptSharePassword, readSharePassword } from "./share-password-encryption";
 import { generateSharePassword } from "./share-password";
-import { publicTreeSql, getNotebookSite, resolveNotebookSiteToken } from "./notebook-site-service";
+import { findArtifactLibraryAncestorId } from "./notebook-service";
+import { notArtifactMemoSql, publicTreeSql, getNotebookSite, resolveNotebookSiteToken } from "./notebook-site-service";
 import { toFtsQuery, escapeLike } from "./memo-list-service";
 
 type ShareRow = {
@@ -76,6 +77,9 @@ export const registerNotebookShareRoutes = (app: Hono<AppEnv>) => {
     const memo = await db.prepare("SELECT notebook_id FROM memos WHERE id = ? AND workspace_id = ? AND is_deleted = 0")
       .bind(memoId, workspaceId).first<{ notebook_id: string | null }>();
     if (!memo) return notFound(c, "Memo not found");
+    c.header("Cache-Control", "private, no-store");
+    if (!await db.prepare(`SELECT 1 FROM memos m WHERE m.id = ? AND ${notArtifactMemoSql("m")}`).bind(memoId).first())
+      return c.json({ sites: [] });
     const rows = await db.prepare(`WITH RECURSIVE ancestors(id, parent_id, workspace_id, name) AS (
       SELECT id, parent_id, workspace_id, name FROM notebooks WHERE id = ? AND workspace_id = ? AND is_deleted = 0
       UNION
@@ -103,7 +107,7 @@ export const registerNotebookShareRoutes = (app: Hono<AppEnv>) => {
     const limit = pageSize(c.req.query("limit"));
     const query = c.req.query("q")?.trim() ?? "";
     const excludedSql = "EXISTS (SELECT 1 FROM notebook_share_excluded_memos e WHERE e.share_id = t.share_id AND e.memo_id = m.id)";
-    const conditions = ["m.is_deleted = 0", "m.id > ?"];
+    const conditions = ["m.is_deleted = 0", notArtifactMemoSql("m"), "m.id > ?"];
     const binds: unknown[] = [share.token, c.req.query("cursor") ?? ""];
     if (visibility !== "all") conditions.push(`${visibility === "public" ? "NOT " : ""}${excludedSql}`);
     if (query) {
@@ -230,6 +234,8 @@ export const registerNotebookShareRoutes = (app: Hono<AppEnv>) => {
       .bind(notebookId, workspaceId)
       .first();
     if (!notebook) return notFound(c, "Notebook not found");
+    if (await findArtifactLibraryAncestorId(c.env.storage.db, workspaceId, notebookId))
+      return apiError(c, "artifact_share_unsupported", "The Artifact Library and its folders cannot be shared", 400);
     const token = randomToken(32);
     const now = isoNow();
     await c.env.storage.db

@@ -127,6 +127,13 @@ test("imports a local HTML file and renders it in an isolated, interactive sandb
   await titleInput.press("Enter");
   await expect(page.locator("[data-memo-id]").filter({ hasText: renamed })).toBeVisible();
 
+  // Artifacts cannot be shared: neither the reader nor the card menu offers it.
+  await expect(reader.getByRole("button", { name: /分享/ })).toHaveCount(0);
+  await page.locator("[data-memo-id]").filter({ hasText: renamed }).click({ button: "right" });
+  await expect(page.getByRole("menuitem", { name: "导出 HTML" }).or(page.getByRole("menuitem", { name: /移入回收站|删除/ })).first()).toBeVisible();
+  await expect(page.getByRole("menuitem", { name: /分享笔记|管理分享|同步后可分享/ })).toHaveCount(0);
+  await page.keyboard.press("Escape");
+
   // Move to trash.
   await reader.getByRole("button", { name: "移入回收站" }).click();
   await expect(page.locator("[data-memo-id]").filter({ hasText: renamed })).toHaveCount(0);

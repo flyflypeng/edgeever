@@ -1,4 +1,4 @@
-import { setSvgResourceSecurityHeaders, accountNoteProseFromRow, collectMemoLinkIds, isPdfAttachment, MemoShareUpdateSchema, NoteBodyFontUpdateSchema, NoteProseUpdateSchema, parsePublishedNoteBodyFont, publicNoteProseFromAccount, PublicShareUnlockSchema, resolveMemoContentDoc, resolvePlayableMediaMimeType, sanitizeNoteProseCss, type AccountNoteProse, type ManagedMemoShare, type MemoShare, type NoteProseAccountRow, type PublicMemoShare, type TiptapDoc } from "@edgeever/shared";
+import { hasArtifactDocumentMarker, setSvgResourceSecurityHeaders, accountNoteProseFromRow, collectMemoLinkIds, isPdfAttachment, MemoShareUpdateSchema, NoteBodyFontUpdateSchema, NoteProseUpdateSchema, parsePublishedNoteBodyFont, publicNoteProseFromAccount, PublicShareUnlockSchema, resolveMemoContentDoc, resolvePlayableMediaMimeType, sanitizeNoteProseCss, type AccountNoteProse, type ManagedMemoShare, type MemoShare, type NoteProseAccountRow, type PublicMemoShare, type TiptapDoc } from "@edgeever/shared";
 import { zValidator } from "@hono/zod-validator";
 import type { Hono } from "hono";
 import type { AppContext, AppEnv } from "./api-context";
@@ -387,9 +387,12 @@ export const registerMemoShareRoutes = (app: Hono<AppEnv>) => {
     const memoId = c.req.param("id");
     const workspaceId = getWorkspaceId(c);
     const memo = await c.env.storage.db.prepare(
-      `SELECT id FROM memos WHERE id = ? AND workspace_id = ? AND is_deleted = 0`
-    ).bind(memoId, workspaceId).first<{ id: string }>();
+      `SELECT m.id, mc.content_markdown FROM memos m LEFT JOIN memo_contents mc ON mc.memo_id = m.id
+       WHERE m.id = ? AND m.workspace_id = ? AND m.is_deleted = 0`
+    ).bind(memoId, workspaceId).first<{ id: string; content_markdown: string | null }>();
     if (!memo) return notFound(c, "Memo not found");
+    if (hasArtifactDocumentMarker(memo.content_markdown))
+      return apiError(c, "artifact_share_unsupported", "HTML artifacts cannot be shared publicly yet", 400);
 
     const existing = await c.env.storage.db.prepare(selectMemoShareSql)
       .bind(memoId, workspaceId).first<MemoShareRow>();
