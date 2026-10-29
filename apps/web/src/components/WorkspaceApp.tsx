@@ -3691,6 +3691,7 @@ export const WorkspaceApp = ({
               onCreateMemo={handleCreateMemo}
               onImportMarkdownFiles={(files) => void handleImportMarkdownFiles(files)}
               onImportHtmlArtifactFiles={handleImportHtmlArtifactFiles}
+              onImportHtmlArtifact={handleImportHtmlArtifact}
               onArtifactThumbnailNeeded={requestArtifactThumbnail}
               onClearSelection={clearMemoSelection}
               onEnterSelectionMode={enterMemoSelectionMode}
