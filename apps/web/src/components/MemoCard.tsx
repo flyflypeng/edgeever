@@ -41,7 +41,7 @@ const formatMemoPreviewDate = (value: string, locale: string, yesterdayLabel: st
 };
 
 /** The 16:10 first screen of an HTML artifact, or a skeleton until there is one. */
-const ArtifactThumbnail = ({ resourceId }: { resourceId: string | undefined }) => {
+export const ArtifactThumbnail = ({ resourceId }: { resourceId: string | undefined }) => {
   const [failedResourceId, setFailedResourceId] = useState<string | null>(null);
   if (!resourceId || failedResourceId === resourceId) {
     return <div className="aspect-[16/10] w-full animate-pulse rounded-md bg-slate-100" data-artifact-thumbnail-placeholder aria-hidden="true" />;

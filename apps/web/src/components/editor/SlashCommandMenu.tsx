@@ -11,6 +11,7 @@ import {
   CalendarDays,
   ChevronsDownUp,
   Clock3,
+  FileCode2,
   FileUp,
   Heading1,
   Heading2,
@@ -61,6 +62,7 @@ export type SlashCommandId =
   | "current-date-time"
   | "attachment"
   | "note-link"
+  | "artifact-card"
   | "external-link";
 
 type SlashCommandGroup = "suggested" | "basic" | "insert";
@@ -79,6 +81,7 @@ export type SlashCommandActions = {
   openAttachmentPicker: () => void;
   openExternalLinkPicker: () => void;
   openNoteLinkPicker: () => void;
+  openArtifactCardPicker: () => void;
   openMathFormula: (kind: "inline" | "block", range?: { from: number; to: number }) => void;
 };
 
@@ -128,6 +131,7 @@ export const createSlashCommandItems = (labels: SlashCommandLabels): SlashComman
   { id: "block-math", command: "equation", group: "insert", icon: Sigma, label: labels.items["block-math"], keywords: ["latex", "formula", "display", "katex", "块级公式", "独立公式", "数式"] },
   { id: "attachment", command: "upload", group: "insert", icon: FileUp, label: labels.items.attachment, keywords: ["file", "attachment", "文件", "上传", "附件"] },
   { id: "note-link", command: "note", group: "insert", icon: Link, label: labels.items["note-link"], keywords: ["link", "memo", "笔记", "引用"] },
+  { id: "artifact-card", command: "card", group: "insert", icon: FileCode2, label: labels.items["artifact-card"], keywords: ["artifact", "html", "card", "制品", "卡片", "成果物"] },
   { id: "external-link", command: "link", group: "insert", icon: Link, label: labels.items["external-link"], keywords: ["url", "web", "链接", "网址"] },
 ];
 
@@ -272,6 +276,10 @@ const runSlashCommand = ({
     case "note-link":
       chain.run();
       window.requestAnimationFrame(actions.openNoteLinkPicker);
+      break;
+    case "artifact-card":
+      chain.run();
+      window.requestAnimationFrame(actions.openArtifactCardPicker);
       break;
     case "external-link":
       chain.run();
