@@ -38,6 +38,7 @@ import {
 import { sha256 } from "./hash-utils";
 import { getRequiredString } from "./mcp-json-rpc";
 import {
+  artifactLibraryNotebookIdsSql,
   escapeLike,
   mapMemoSummary,
   toFtsQuery,
@@ -198,6 +199,12 @@ export const searchMemoSummaries = async (
     binds.push(notebookId);
   }
 
+  // Same rule as the workspace list: without a notebook, query or tag, artifacts stay out.
+  if (!notebookId && !q && tags.length === 0) {
+    filters.push(`m.notebook_id NOT IN (${artifactLibraryNotebookIdsSql})`);
+    binds.push(options.workspaceId, options.workspaceId);
+  }
+
   for (const tag of tags) {
     filters.push("EXISTS (SELECT 1 FROM memo_tags mt WHERE mt.memo_id = m.id AND mt.workspace_id = ? AND mt.name = ?)");
     binds.push(options.workspaceId, tag);
@@ -313,6 +320,9 @@ export const listMemosForMcp = async (
     ? `(instr(c.content_markdown, '<!-- edgeever-poster-v1:') > 0) = ${options.poster ? 1 : 0}`
     : "1 = 1";
   const deletedFilter = options.includeDeleted ? "1 = 1" : "m.is_deleted = 0";
+  // Like the workspace list, a list without a notebook leaves artifacts out.
+  const artifactFilter = notebookId ? "1 = 1" : `m.notebook_id NOT IN (${artifactLibraryNotebookIdsSql})`;
+  const artifactBinds = notebookId ? [] : [options.workspaceId, options.workspaceId];
 
   if (options.includeContent) {
     const rows = await db
@@ -324,11 +334,11 @@ export const listMemosForMcp = async (
          FROM memos m
          INNER JOIN memo_contents c ON c.memo_id = m.id
          WHERE m.workspace_id = ? AND ${deletedFilter} AND ${posterFilter}
-           AND (? IS NULL OR m.notebook_id = ?)
+           AND (? IS NULL OR m.notebook_id = ?) AND ${artifactFilter}
          ORDER BY m.updated_at DESC, m.id ASC
          LIMIT ? OFFSET ?`
       )
-      .bind(options.workspaceId, notebookId, notebookId, pageSize, offset)
+      .bind(options.workspaceId, notebookId, notebookId, ...artifactBinds, pageSize, offset)
       .all<MemoDetailRow>();
     const page = rows.results.slice(0, limit).map(mapMemoDetail);
 
@@ -349,11 +359,11 @@ export const listMemosForMcp = async (
        FROM memos m
        INNER JOIN memo_contents c ON c.memo_id = m.id
        WHERE m.workspace_id = ? AND ${deletedFilter} AND ${posterFilter}
-         AND (? IS NULL OR m.notebook_id = ?)
+         AND (? IS NULL OR m.notebook_id = ?) AND ${artifactFilter}
        ORDER BY m.updated_at DESC, m.id ASC
        LIMIT ? OFFSET ?`
     )
-    .bind(options.workspaceId, notebookId, notebookId, pageSize, offset)
+    .bind(options.workspaceId, notebookId, notebookId, ...artifactBinds, pageSize, offset)
     .all<MemoSummaryRow>();
   const page = rows.results.slice(0, limit).map(mapMemoSummary);
 
@@ -1045,7 +1055,7 @@ export const createMemoRecord = async (
   return memo;
 };
 
-const normalizeImportSource = (value: string) => {
+export const normalizeImportSource = (value: string) => {
   const source = value.trim().toLocaleLowerCase("en-US");
   if (source.length > 80 || !/^[a-z0-9._-]+$/.test(source)) {
     throw new AppError(

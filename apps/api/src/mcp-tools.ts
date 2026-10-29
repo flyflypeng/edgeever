@@ -178,7 +178,7 @@ const MCP_TOOL_DEFINITIONS = [
   },
   {
     name: "list_memos",
-    description: "List EdgeEver memos with pagination. Use poster=true to list only editable poster notes (海报笔记), false to exclude them. Use includeContent when full Markdown is needed.",
+    description: "List EdgeEver memos with pagination. Without notebookId, HTML artifacts in the Agent Artifacts library are left out; use list_artifacts for them. Use poster=true to list only editable poster notes (海报笔记), false to exclude them. Use includeContent when full Markdown is needed.",
     inputSchema: {
       type: "object",
       additionalProperties: false,
@@ -543,6 +543,67 @@ const MCP_TOOL_DEFINITIONS = [
             },
           },
         },
+      },
+    },
+  },
+  {
+    name: "create_html_artifact",
+    description:
+      "Import a self-contained HTML page into the Agent Artifacts library (Agent 制品). Pass source and externalId together to make repeated imports of the same page idempotent: identical HTML returns unchanged, different HTML replaces the page as a new version (title, tags and, when folderPath is given, the folder are updated) and returns replaced; an artifact that was trashed or deleted is created again. Local relative assets are not imported and are reported in missingLocalAssets. Requires write:memos and write:resources; creating folders also requires write:notebooks.",
+    inputSchema: {
+      type: "object",
+      required: ["title", "html"],
+      additionalProperties: false,
+      properties: {
+        title: { type: "string", minLength: 1, maxLength: 160 },
+        html: { type: "string", description: "The complete HTML document, at most 20 MB as UTF-8." },
+        folderPath: {
+          type: "string",
+          description: "Slash-separated folder names relative to the Artifact Library root, such as 'Projects/AgentEnv'. Missing folders are created. Empty, '.' and '..' segments are rejected. Omit for the library root.",
+        },
+        tags: { type: "array", maxItems: 100, items: { type: "string" } },
+        thumbnailBase64: { type: "string", description: "Optional first-screen image of the page, used as the card thumbnail. Requires thumbnailMimeType." },
+        thumbnailMimeType: { type: "string", enum: ["image/png", "image/jpeg", "image/webp"] },
+        source: {
+          type: "string",
+          minLength: 1,
+          maxLength: 80,
+          pattern: "^[A-Za-z0-9._-]+$",
+          description: "Stable identifier of the producing agent or tool. Must be given together with externalId.",
+        },
+        externalId: {
+          type: "string",
+          minLength: 1,
+          maxLength: 512,
+          description: "Stable ID of this page in the source. Must be given together with source.",
+        },
+      },
+    },
+  },
+  {
+    name: "list_artifacts",
+    description: "List HTML artifacts in the Agent Artifacts library (Agent 制品), newest updated first, with each artifact's folder path. folderPath limits the list to that folder and its subfolders; q searches titles and visible page text; tag filters by tag. Requires read:memos and read:resources.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        folderPath: { type: "string", description: "Slash-separated folder names relative to the Artifact Library root, such as 'Projects/AgentEnv'." },
+        q: { type: "string" },
+        tag: { type: "string" },
+        limit: { type: "integer", minimum: 1, maximum: 100 },
+      },
+    },
+  },
+  {
+    name: "get_artifact",
+    description: "Read an HTML artifact's metadata. The HTML source is returned only when includeHtml is true. Requires read:memos and read:resources.",
+    inputSchema: {
+      type: "object",
+      required: ["id"],
+      additionalProperties: false,
+      properties: {
+        id: { type: "string" },
+        includeHtml: { type: "boolean", description: "Also return the page's HTML source. Defaults to false." },
       },
     },
   },
@@ -1062,6 +1123,8 @@ const READ_ONLY_MCP_TOOLS = new Set([
   "list_memo_resources",
   "list_resources",
   "list_memo_revisions",
+  "list_artifacts",
+  "get_artifact",
   "get_notebook",
   "find_notebooks",
   "resolve_notebook_path",
@@ -1080,6 +1143,7 @@ const NON_DESTRUCTIVE_MCP_TOOLS = new Set([
   "create_infographic_memo",
   "create_poster_memo",
   "import_memos",
+  "create_html_artifact",
   "restore_memos",
   "move_memos",
   "add_tags_to_memos",

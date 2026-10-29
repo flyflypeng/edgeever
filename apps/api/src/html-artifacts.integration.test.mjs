@@ -52,22 +52,21 @@ const installation = () => {
       expectedContentHash: body.editSession.baseContentHash,
     });
   };
-  const agentAuth = {
+  const agentAuth = (scopes) => ({
     kind: "agent", actorType: "agent", actorId: "tok_agent", username: "agent", displayName: null,
-    scopes: ["read:memos", "write:memos"], workspaceId: "ws_default", role: "owner",
+    scopes, workspaceId: "ws_default", role: "owner",
+  });
+  const callToolWithScopes = (scopes, name, args) => {
+    const auth = agentAuth(scopes);
+    return callMcpTool({ env: environment, get: (key) => (key === "auth" ? auth : undefined) }, auth, name, args);
   };
-  const callTool = (name, args) => callMcpTool(
-    { env: environment, get: (key) => (key === "auth" ? agentAuth : undefined) },
-    agentAuth,
-    name,
-    args,
-  );
+  const callTool = (name, args) => callToolWithScopes(["read:memos", "write:memos"], name, args);
   const resourcesOf = async (memoId) =>
     (await request("GET", "/api/v1/resources")).body.resources.filter((resource) => resource.memoId === memoId);
   const storedFiles = () => readdirSync(resourcesDirectory, { recursive: true, withFileTypes: true })
     .filter((entry) => entry.isFile())
     .map((entry) => join(entry.parentPath ?? entry.path, entry.name));
-  return { sqlite, request, send, importArtifact, ensureLibrary, inboxId, saveBody, callTool, resourcesOf, storedFiles };
+  return { sqlite, request, send, importArtifact, ensureLibrary, inboxId, saveBody, callTool, callToolWithScopes, resourcesOf, storedFiles };
 };
 
 const htmlFile = (html, name = "report.html", type = "text/html") => new File([html], name, { type });
@@ -586,5 +585,236 @@ describe("artifact thumbnails", () => {
     expect(replaced.status).toBe(200);
     expect(replaced.body.memo.artifact).toMatchObject({ thumbnailStale: false });
     expect(replaced.body.memo.artifact.thumbnailResourceId).not.toBe(created.body.memo.artifact.thumbnailResourceId);
+  });
+});
+
+describe("MCP artifact tools", () => {
+  const ALL_SCOPES = ["read:memos", "write:memos", "read:resources", "write:resources", "read:notebooks", "write:notebooks"];
+  const agent = (env) => (name, args) => env.callToolWithScopes(ALL_SCOPES, name, args);
+
+  test("create_html_artifact creates the artifact in a new folder path inside the library", async () => {
+    const env = installation();
+    const call = agent(env);
+    const html = "<title>Ignored</title><p>agent report</p><img src=\"./chart.png\">";
+
+    const result = await call("create_html_artifact", { title: "Weekly report", html, folderPath: "Projects/AgentEnv", tags: ["agent"] });
+
+    expect(result).toMatchObject({
+      status: "created",
+      artifact: { title: "Weekly report", folderPath: "Projects/AgentEnv", tags: ["agent"], thumbnailPending: true, missingLocalAssets: ["./chart.png"] },
+    });
+    const memo = (await env.request("GET", `/api/v1/memos/${result.artifact.id}`)).body.memo;
+    expect(memo).toMatchObject({ title: "Weekly report", artifact: { kind: "html" } });
+    expect(result.artifact.updatedAt).toBe(memo.updatedAt);
+    const notebooks = (await env.request("GET", "/api/v1/notebooks")).body.notebooks;
+    const library = notebooks.find((notebook) => notebook.systemKind === "artifact_library");
+    const projects = notebooks.find((notebook) => notebook.name === "Projects");
+    const agentEnv = notebooks.find((notebook) => notebook.name === "AgentEnv");
+    expect([projects.parentId, agentEnv.parentId, memo.notebookId]).toEqual([library.id, projects.id, agentEnv.id]);
+    const [resource] = await env.resourcesOf(memo.id);
+    expect((await env.send("GET", `/api/v1/resources/${resource.id}/blob`)).body).toBe(html);
+
+    // An existing path is reused, matching folder names case-insensitively.
+    const second = await call("create_html_artifact", { title: "Second", html: "<p>two</p>", folderPath: "projects/agentenv" });
+    expect(second.artifact.folderPath).toBe("Projects/AgentEnv");
+    expect((await env.request("GET", "/api/v1/notebooks")).body.notebooks).toHaveLength(notebooks.length);
+  });
+  test("create_html_artifact with source and externalId returns unchanged for the same HTML and replaces a changed page as a new version", async () => {
+    const env = installation();
+    const call = agent(env);
+    const key = { source: "Claude-Code", externalId: "reports/weekly" };
+
+    const created = await call("create_html_artifact", { ...key, title: "Weekly", html: "<p>okapi v1</p>", tags: ["v1"] });
+    expect(created.status).toBe("created");
+    const original = (await env.request("GET", `/api/v1/memos/${created.artifact.id}`)).body.memo;
+
+    // Same HTML: nothing changes, not even the title or tags.
+    const unchanged = await call("create_html_artifact", { ...key, title: "Other title", html: "<p>okapi v1</p>", tags: ["other"] });
+    expect(unchanged).toMatchObject({ status: "unchanged", artifact: { id: original.id, title: "Weekly", tags: ["v1"] } });
+    expect((await env.request("GET", `/api/v1/memos/${original.id}`)).body.memo.revision).toBe(original.revision);
+
+    // Changed HTML: the page, title, tags and folder follow the new call; the old page is a version.
+    const replaced = await call("create_html_artifact", { ...key, source: "claude-code", title: "Weekly v2", html: "<p>gecko v2</p>", tags: ["v2"], folderPath: "Reports" });
+    expect(replaced).toMatchObject({ status: "replaced", artifact: { id: original.id, title: "Weekly v2", tags: ["v2"], folderPath: "Reports" } });
+    const memo = (await env.request("GET", `/api/v1/memos/${original.id}`)).body.memo;
+    expect(memo.contentText).toBe("gecko v2");
+    const [resource] = (await env.resourcesOf(original.id)).filter((item) => item.id === memo.artifact.htmlResourceId);
+    expect((await env.send("GET", `/api/v1/resources/${resource.id}/blob`)).body).toBe("<p>gecko v2</p>");
+    const revisions = (await env.request("GET", `/api/v1/memos/${original.id}/revisions`)).body.revisions;
+    expect(revisions.map((revision) => revision.contentText)).toContain("okapi v1");
+    const library = await env.ensureLibrary();
+    expect((await env.request("GET", `/api/v1/memos?notebookId=${library.id}&includeDescendants=1`)).body.memos.map((item) => item.id)).toEqual([original.id]);
+  });
+
+  test("create_html_artifact creates a new artifact when the mapped one is in the trash or purged", async () => {
+    const env = installation();
+    const call = agent(env);
+    const key = { source: "agent", externalId: "page-1" };
+    const first = await call("create_html_artifact", { ...key, title: "Page", html: "<p>one</p>" });
+    await env.request("DELETE", `/api/v1/memos/${first.artifact.id}`);
+
+    const afterTrash = await call("create_html_artifact", { ...key, title: "Page", html: "<p>one</p>" });
+    expect(afterTrash.status).toBe("created");
+    expect(afterTrash.artifact.id).not.toBe(first.artifact.id);
+    // The mapping now points at the new artifact.
+    expect((await call("create_html_artifact", { ...key, title: "Page", html: "<p>one</p>" })).artifact.id).toBe(afterTrash.artifact.id);
+
+    await env.request("DELETE", `/api/v1/memos/${afterTrash.artifact.id}`);
+    expect((await env.request("DELETE", `/api/v1/memos/${afterTrash.artifact.id}?permanent=1`)).status).toBe(200);
+    const afterPurge = await call("create_html_artifact", { ...key, title: "Page", html: "<p>one</p>" });
+    expect(afterPurge.status).toBe("created");
+    expect([first.artifact.id, afterTrash.artifact.id]).not.toContain(afterPurge.artifact.id);
+    expect((await call("create_html_artifact", { ...key, title: "Page", html: "<p>one</p>" })).status).toBe("unchanged");
+  });
+  test("create_html_artifact rejects '..' and empty folder path segments before writing anything", async () => {
+    const env = installation();
+    const call = agent(env);
+    const notebooksBefore = (await env.request("GET", "/api/v1/notebooks")).body.notebooks.length;
+
+    for (const folderPath of ["../Escape", "Projects/../Other", "Projects//AgentEnv", "/Projects", "Projects/", "", "Projects/./x"]) {
+      await expect(call("create_html_artifact", { title: "Page", html: "<p>x</p>", folderPath }))
+        .rejects.toMatchObject({ code: "invalid_params", status: 400 });
+    }
+    expect((await env.request("GET", "/api/v1/notebooks")).body.notebooks).toHaveLength(notebooksBefore);
+    expect((await env.request("GET", "/api/v1/memos?trash=0&q=x")).body.memos).toEqual([]);
+  });
+
+  test("MCP errors carry the same codes as HTTP: size, scopes, half an import key and thumbnail type", async () => {
+    const env = installation();
+    const token = async (scopes) => (await env.request("POST", "/api/v1/api-tokens", { name: `token ${scopes.length}`, scopes })).body.token;
+    const mcp = async (bearer, args) => {
+      const response = await env.send("POST", "/mcp", {
+        headers: { Authorization: `Bearer ${bearer}`, "Content-Type": "application/json", Accept: "application/json, text/event-stream" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "create_html_artifact", arguments: args } }),
+      });
+      expect(response.status).toBe(200);
+      return response.body.result;
+    };
+    const code = async (bearer, args) => {
+      const result = await mcp(bearer, args);
+      expect(result.isError).toBe(true);
+      return result.structuredContent.error.code;
+    };
+    const writer = await token(["read:memos", "write:memos", "read:resources", "write:resources"]);
+    const full = await token(["read:memos", "write:memos", "read:resources", "write:resources", "read:notebooks", "write:notebooks"]);
+    const page = { title: "Page", html: "<p>x</p>" };
+
+    expect(await code(await token(["read:memos", "write:memos"]), page)).toBe("forbidden");
+    // Creating the library or a folder needs write:notebooks too.
+    expect(await code(writer, page)).toBe("forbidden");
+    expect((await mcp(full, page)).structuredContent.status).toBe("created");
+    expect((await mcp(writer, page)).structuredContent.status).toBe("created");
+    expect(await code(writer, { ...page, folderPath: "New folder" })).toBe("forbidden");
+
+    const bigHtml = "<p>" + "a".repeat(20 * MiB - 7) + "</p>";
+    expect(await code(full, { ...page, html: bigHtml + "a" })).toBe("artifact_too_large");
+    expect(await code(full, { ...page, html: "   " })).toBe("artifact_invalid_html");
+    expect(await code(full, { ...page, source: "agent" })).toBe("invalid_params");
+    expect(await code(full, { ...page, externalId: "page-1" })).toBe("invalid_params");
+    expect(await code(full, { ...page, source: "not a source!", externalId: "page-1" })).toBe("invalid_import_source");
+    expect(await code(full, { ...page, thumbnailBase64: "AAAA", thumbnailMimeType: "image/svg+xml" })).toBe("unsupported_media_type");
+    expect(await code(full, { ...page, thumbnailBase64: "AAAA" })).toBe("invalid_params");
+    // A note imported with import_memos keeps its key; an artifact cannot take it over.
+    const inboxId = await env.inboxId();
+    await env.callTool("import_memos", { source: "agent", notebookId: inboxId, items: [{ externalId: "note-1", title: "Note" }] });
+    expect(await code(full, { ...page, source: "agent", externalId: "note-1" })).toBe("import_source_conflict");
+
+    expect((await mcp(full, { ...page, html: bigHtml })).structuredContent.status).toBe("created");
+    const library = await env.ensureLibrary();
+    expect((await env.request("GET", `/api/v1/memos?notebookId=${library.id}`)).body.memos).toHaveLength(3);
+  });
+
+  test("a thumbnail sent with create_html_artifact becomes the card thumbnail; replaced pages take the new one", async () => {
+    const env = installation();
+    const call = agent(env);
+    const webpBase64 = Buffer.from([1, 2, 3]).toString("base64");
+    const key = { source: "agent", externalId: "thumb" };
+
+    const created = await call("create_html_artifact", { ...key, title: "Page", html: "<p>v1</p>", thumbnailBase64: webpBase64, thumbnailMimeType: "image/webp" });
+
+    expect(created.artifact.thumbnailPending).toBe(false);
+    const memo = (await env.request("GET", `/api/v1/memos/${created.artifact.id}`)).body.memo;
+    expect(memo.artifact).toMatchObject({ thumbnailStale: false });
+    const listed = (await env.request("GET", `/api/v1/memos?notebookId=${memo.notebookId}`)).body.memos[0];
+    expect(listed.artifact).toMatchObject({ thumbnailResourceId: memo.artifact.thumbnailResourceId, thumbnailStale: false });
+    const image = await env.send("GET", `/api/v1/resources/${memo.artifact.thumbnailResourceId}/blob`);
+    expect(image.headers.get("Content-Type")).toBe("image/webp");
+
+    const replaced = await call("create_html_artifact", { ...key, title: "Page", html: "<p>v2</p>", thumbnailBase64: webpBase64, thumbnailMimeType: "image/png" });
+    expect(replaced).toMatchObject({ status: "replaced", artifact: { thumbnailPending: false } });
+    const after = (await env.request("GET", `/api/v1/memos/${created.artifact.id}`)).body.memo;
+    expect(after.artifact.thumbnailResourceId).not.toBe(memo.artifact.thumbnailResourceId);
+
+    // Without a thumbnail the card waits for a client to render one.
+    const plain = await call("create_html_artifact", { title: "Plain", html: "<p>plain</p>" });
+    expect(plain.artifact.thumbnailPending).toBe(true);
+  });
+  test("get_artifact returns metadata and only includes the HTML when includeHtml is true", async () => {
+    const env = installation();
+    const call = agent(env);
+    const html = "<title>Report</title><p>okapi</p>";
+    const { artifact } = await call("create_html_artifact", { title: "Report", html, folderPath: "Reports", tags: ["weekly"] });
+
+    const metadata = await call("get_artifact", { id: artifact.id });
+    expect(metadata.html).toBeUndefined();
+    expect(metadata.artifact).toMatchObject({ id: artifact.id, title: "Report", folderPath: "Reports", tags: ["weekly"], thumbnailPending: true });
+    expect(JSON.stringify(metadata)).not.toContain("<p>okapi</p>");
+
+    expect((await call("get_artifact", { id: artifact.id, includeHtml: true })).html).toBe(html);
+
+    const note = (await env.request("POST", "/api/v1/memos", { notebookId: await env.inboxId(), title: "Note", contentMarkdown: "hello" })).body.memo;
+    await expect(call("get_artifact", { id: note.id })).rejects.toMatchObject({ code: "bad_request", status: 400 });
+    await expect(call("get_artifact", { id: "memo_missing" })).rejects.toMatchObject({ code: "not_found", status: 404 });
+    await expect(env.callToolWithScopes(["read:memos"], "get_artifact", { id: artifact.id })).rejects.toMatchObject({ code: "forbidden", status: 403 });
+  });
+
+  test("list_artifacts filters by folder path, search text and tag", async () => {
+    const env = installation();
+    const call = agent(env);
+    expect(await call("list_artifacts", {})).toMatchObject({ artifacts: [] });
+    const create = async (title, html, folderPath, tags) => (await call("create_html_artifact", { title, html, folderPath, tags })).artifact.id;
+    const rootId = await create("Root page", "<p>pangolin</p>", undefined, ["shared"]);
+    const projectId = await create("Project page", "<p>okapi</p>", "Projects", ["shared"]);
+    const nestedId = await create("Nested page", "<p>okapi pangolin</p>", "Projects/AgentEnv", ["deep"]);
+    await env.request("POST", "/api/v1/memos", { notebookId: await env.inboxId(), title: "Okapi note", contentMarkdown: "okapi pangolin", tags: ["shared"] });
+    const ids = async (args) => (await call("list_artifacts", args)).artifacts.map((item) => item.id).sort();
+
+    expect(await ids({})).toEqual([rootId, projectId, nestedId].sort());
+    expect(await ids({ folderPath: "Projects" })).toEqual([projectId, nestedId].sort());
+    expect(await ids({ folderPath: "projects/agentenv" })).toEqual([nestedId]);
+    expect(await ids({ q: "okapi" })).toEqual([projectId, nestedId].sort());
+    expect(await ids({ tag: "shared" })).toEqual([rootId, projectId].sort());
+    expect(await ids({ folderPath: "Projects", q: "pangolin" })).toEqual([nestedId]);
+    const listed = await call("list_artifacts", { limit: 1 });
+    expect(listed).toMatchObject({ hasMore: true });
+    expect(listed.artifacts).toHaveLength(1);
+    expect((await call("list_artifacts", { folderPath: "Projects/AgentEnv" })).artifacts[0])
+      .toMatchObject({ id: nestedId, title: "Nested page", folderPath: "Projects/AgentEnv", tags: ["deep"], thumbnailPending: true });
+    await expect(call("list_artifacts", { folderPath: "Missing" })).rejects.toMatchObject({ code: "not_found", status: 404 });
+    await expect(call("list_artifacts", { folderPath: "../x" })).rejects.toMatchObject({ code: "invalid_params" });
+    await expect(env.callToolWithScopes(["read:memos"], "list_artifacts", {})).rejects.toMatchObject({ code: "forbidden" });
+  });
+
+  test("list_memos and query-less search_memos without a notebook leave artifacts out, like the workspace list", async () => {
+    const env = installation();
+    const call = agent(env);
+    const { artifact } = await call("create_html_artifact", { title: "Pangolin page", html: "<p>pangolin</p>", folderPath: "Folder", tags: ["shared"] });
+    const note = (await env.request("POST", "/api/v1/memos", { notebookId: await env.inboxId(), title: "Pangolin note", contentMarkdown: "pangolin", tags: ["shared"] })).body.memo;
+    const library = await env.ensureLibrary();
+    const folderId = (await call("get_artifact", { id: artifact.id })).artifact.folderId;
+    const ids = (result) => result.memos.map((memo) => memo.id);
+
+    for (const args of [{}, { includeContent: true }, { includeDeleted: true }]) {
+      const listed = ids(await call("list_memos", args));
+      expect(listed).toContain(note.id);
+      expect(listed).not.toContain(artifact.id);
+    }
+    expect(ids(await call("list_memos", { notebookId: folderId }))).toEqual([artifact.id]);
+    expect(ids(await call("list_memos", { notebookId: library.id }))).toEqual([]);
+    const searchAll = ids(await call("search_memos", {}));
+    expect(searchAll).toContain(note.id);
+    expect(searchAll).not.toContain(artifact.id);
+    expect(ids(await call("search_memos", { query: "pangolin" })).sort()).toEqual([artifact.id, note.id].sort());
+    expect(ids(await call("search_memos", { tags: ["shared"] })).sort()).toEqual([artifact.id, note.id].sort());
   });
 });
