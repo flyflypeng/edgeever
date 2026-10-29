@@ -1061,7 +1061,7 @@ export const pl = {
     moveToTrash: "Przenieś do kosza",
     loading: "Wczytywanie strony…",
     loadFailed: "Nie udało się wczytać strony. Sprawdź połączenie i spróbuj ponownie.",
-    renameFailed: "Nowy tytuł nie został zapisany",
+    updateFailed: "Zmiana nie została zapisana",
     importFailedTitle: "Nie udało się zaimportować artefaktu HTML",
     importInvalid: "Można importować tylko niepuste pliki .html lub .htm w kodowaniu UTF-8.",
     importTooLarge: "Plik HTML może mieć najwyżej 20 MB.",

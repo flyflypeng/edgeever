@@ -69,7 +69,70 @@ pub(crate) fn note_list_metadata(markdown: &str) -> Value {
             metadata.insert("structuredTable".to_owned(), json!(false));
         }
     }
+    if let Some(artifact) = artifact_summary(markdown) {
+        metadata.insert("artifact".to_owned(), artifact);
+    }
     Value::Object(metadata)
+}
+
+/// Mirrors `getArtifactSummary`: only a valid `edgeever-artifact-v1` envelope
+/// marks a note as an HTML Artifact.
+fn artifact_summary(markdown: &str) -> Option<Value> {
+    let payload = marker_payload(markdown, "edgeever-artifact-v1")?;
+    if payload.len() > 100_000 {
+        return None;
+    }
+    let value = decode_json(&payload)?;
+    let document = value.as_object()?;
+    let bounded = |key: &str, max: usize| {
+        document
+            .get(key)
+            .and_then(Value::as_str)
+            .filter(|text| !text.is_empty() && js_len(text) <= max)
+    };
+    let is_sha256 = |text: &str| {
+        text.len() == 64
+            && text
+                .bytes()
+                .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+    };
+    let byte_size = document.get("byteSize").and_then(Value::as_u64)?;
+    let sha256 = document
+        .get("sha256")
+        .and_then(Value::as_str)
+        .filter(|text| is_sha256(text))?;
+    let thumbnail_id = match document.get("thumbnailResourceId") {
+        None => None,
+        Some(_) => Some(bounded("thumbnailResourceId", 160)?),
+    };
+    let thumbnail_sha256 = match document.get("thumbnailSha256") {
+        None => None,
+        Some(value) => Some(value.as_str().filter(|text| is_sha256(text))?),
+    };
+    let source = document.get("source")?.as_object()?;
+    let valid = document.get("schemaVersion").and_then(Value::as_u64) == Some(1)
+        && document.get("kind").and_then(Value::as_str) == Some("html")
+        && bounded("htmlResourceId", 160).is_some()
+        && bounded("originalFilename", 255).is_some()
+        && (1..=20 * 1024 * 1024).contains(&byte_size)
+        && matches!(
+            source.get("type").and_then(Value::as_str),
+            Some("upload" | "mcp")
+        )
+        && optional_string(source, "agent", Some(80));
+    if !valid {
+        return None;
+    }
+    let mut summary = Map::new();
+    summary.insert("kind".to_owned(), json!("html"));
+    if let Some(id) = thumbnail_id {
+        summary.insert("thumbnailResourceId".to_owned(), json!(id));
+    }
+    summary.insert(
+        "thumbnailStale".to_owned(),
+        json!(thumbnail_id.is_none() || thumbnail_sha256 != Some(sha256)),
+    );
+    Some(Value::Object(summary))
 }
 
 fn is_infographic(markdown: &str) -> bool {
@@ -640,6 +703,44 @@ mod tests {
             serde_json::json!(["名称", "字段"])
         );
         assert!(metadata.get("contentMarkdown").is_none());
+    }
+
+    #[test]
+    fn artifact_envelope_derives_the_artifact_flag() {
+        let sha = "a".repeat(64);
+        let document = |extra: &str| {
+            encode_json(&format!(
+                r#"{{"schemaVersion":1,"kind":"html","htmlResourceId":"res_html","originalFilename":"page.html","byteSize":12,"sha256":"{sha}","source":{{"type":"upload"}}{extra}}}"#
+            ))
+        };
+        let plain = note_list_metadata(&wrap("edgeever-artifact-v1", &document("")));
+        assert_eq!(
+            plain["artifact"],
+            serde_json::json!({ "kind": "html", "thumbnailStale": true })
+        );
+        let fresh = note_list_metadata(&wrap(
+            "edgeever-artifact-v1",
+            &document(&format!(
+                r#","thumbnailResourceId":"res_thumb","thumbnailSha256":"{sha}""#
+            )),
+        ));
+        assert_eq!(
+            fresh["artifact"],
+            serde_json::json!({ "kind": "html", "thumbnailResourceId": "res_thumb", "thumbnailStale": false })
+        );
+        for markdown in [
+            "ordinary note".to_owned(),
+            "<!-- edgeever-artifact-v1:broken -->".to_owned(),
+            wrap(
+                "edgeever-artifact-v1",
+                &encode_json(r#"{"schemaVersion":1,"kind":"pdf"}"#),
+            ),
+        ] {
+            assert!(
+                note_list_metadata(&markdown).get("artifact").is_none(),
+                "{markdown}"
+            );
+        }
     }
 
     fn encode_json(json: &str) -> String {

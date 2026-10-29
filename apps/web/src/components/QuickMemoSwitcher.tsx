@@ -1,6 +1,6 @@
 import { useDeferredValue, useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { FileText, LoaderCircle } from "lucide-react";
+import { FileCode2, FileText, LoaderCircle } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { MemoSummary } from "@edgeever/shared";
 import type { EdgeEverRepository } from "@/lib/repository";
@@ -95,7 +95,11 @@ export const QuickMemoSwitcher = ({
                       value={memo.id}
                       onSelect={() => onOpenMemo(memo)}
                     >
-                      <FileText className="h-4 w-4 shrink-0 text-slate-500" />
+                      {memo.artifact ? (
+                        <FileCode2 className="h-4 w-4 shrink-0 text-slate-500" aria-label={t("htmlArtifact.name")} data-artifact-result-icon />
+                      ) : (
+                        <FileText className="h-4 w-4 shrink-0 text-slate-500" />
+                      )}
                       <div className="min-w-0 flex-1 py-0.5">
                         <div className="truncate font-medium text-slate-900">{memo.title}</div>
                         {memo.excerpt ? (

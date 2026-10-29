@@ -310,9 +310,9 @@ export const createDesktopRepository = (): EdgeEverRepository => ({
     return { memo: await repairDisplayedMemo((await request("memo.get", { memoId: result.memo.id, includeDeleted: false })).memo) };
   },
 
-  renameArtifact: async (memo, title) => {
-    if (typeof navigator !== "undefined" && !navigator.onLine) throw new Error("artifact_rename_offline");
-    const result = await api.updateMemo(memo.id, { title, expectedRevision: memo.revision });
+  updateArtifactMetadata: async (memo, input) => {
+    if (typeof navigator !== "undefined" && !navigator.onLine) throw new Error("artifact_update_offline");
+    const result = await api.updateMemo(memo.id, { ...input, expectedRevision: memo.revision });
     await request("sync.apply", {
       changes: [{ entityType: "memo", operation: "upsert", entityId: result.memo.id, memo: result.memo, notebook: null }],
     });

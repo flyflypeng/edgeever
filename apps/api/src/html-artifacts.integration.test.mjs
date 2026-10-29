@@ -239,3 +239,33 @@ describe("artifacts are never shared publicly", () => {
     expect((await pub("", "L".repeat(43))).status).toBe(404);
   });
 });
+
+describe("artifact list visibility", () => {
+  test("workspace-wide lists and activity leave artifacts out; query, tag, trash and library lists include them", async () => {
+    const env = installation();
+    const library = await env.ensureLibrary();
+    const folder = (await env.request("POST", "/api/v1/notebooks", { name: "Folder", parentId: library.id })).body.notebook;
+    const artifact = (await env.importArtifact(htmlFile("<title>Pangolin page</title><p>pangolin</p>"), {
+      folderId: folder.id,
+      tags: JSON.stringify(["shared"]),
+    })).body.memo;
+    const note = (await env.request("POST", "/api/v1/memos", { notebookId: await env.inboxId(), title: "Pangolin note", contentMarkdown: "pangolin", tags: ["shared"] })).body.memo;
+    const ids = async (path) => (await env.request("GET", path)).body.memos.map((memo) => memo.id).sort();
+
+    const workspace = await ids("/api/v1/memos");
+    expect(workspace).toContain(note.id);
+    expect(workspace).not.toContain(artifact.id);
+    expect((await env.request("GET", "/api/v1/memos")).body.totalCount).toBe(workspace.length);
+    const activity = await ids("/api/v1/memos/activity");
+    expect(activity).toContain(note.id);
+    expect(activity).not.toContain(artifact.id);
+    expect(await ids("/api/v1/memos?q=pangolin")).toEqual([artifact.id, note.id].sort());
+    expect(await ids("/api/v1/memos?tag=shared")).toEqual([artifact.id, note.id].sort());
+    expect(await ids(`/api/v1/memos?notebookId=${folder.id}`)).toEqual([artifact.id]);
+    expect(await ids(`/api/v1/memos?notebookId=${library.id}&includeDescendants=1`)).toEqual([artifact.id]);
+    expect(await ids(`/api/v1/memos/activity?notebookId=${folder.id}`)).toEqual([artifact.id]);
+
+    expect((await env.request("DELETE", `/api/v1/memos/${artifact.id}`)).status).toBe(200);
+    expect(await ids("/api/v1/memos?trash=1")).toEqual([artifact.id]);
+  });
+});

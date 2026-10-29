@@ -156,6 +156,17 @@ export const toFtsQuery = (value: string) => {
 export const escapeLike = (value: string) =>
   value.replace(/[\\%_]/g, (character) => `\\${character}`);
 
+// Memos inside the Artifact Library subtree. Lists without a notebook, query,
+// tag or trash view leave these out so artifacts do not crowd ordinary notes.
+const artifactLibraryNotebookIdsSql = `SELECT id FROM (
+  WITH RECURSIVE library_tree(id) AS (
+    SELECT id FROM notebooks WHERE workspace_id = ? AND system_kind = 'artifact_library'
+    UNION
+    SELECT n.id FROM notebooks n INNER JOIN library_tree t ON n.parent_id = t.id WHERE n.workspace_id = ?
+  )
+  SELECT id FROM library_tree
+)`;
+
 export const listMemos = async (
   database: DatabaseAdapter,
   input: ListMemosInput,
@@ -197,6 +208,11 @@ export const listMemos = async (
       baseConditions.push("m.notebook_id = ?");
       baseBinds.push(notebookId);
     }
+  }
+
+  if (!notebookId && !query && !tag && !includeTrash) {
+    baseConditions.push(`m.notebook_id NOT IN (${artifactLibraryNotebookIdsSql})`);
+    baseBinds.push(input.workspaceId, input.workspaceId);
   }
 
   if (tag) {

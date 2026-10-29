@@ -1072,7 +1072,7 @@ export const zhCN = {
     moveToTrash: "移入回收站",
     loading: "正在加载网页…",
     loadFailed: "没能加载这个网页。请检查网络后重试。",
-    renameFailed: "改名没有保存",
+    updateFailed: "修改没有保存",
     importFailedTitle: "没能导入 HTML 制品",
     importInvalid: "只能导入 UTF-8 编码、内容不为空的 .html 或 .htm 文件。",
     importTooLarge: "HTML 文件不能超过 20MB。",

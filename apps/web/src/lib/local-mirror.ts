@@ -11,6 +11,7 @@ import {
   getPosterSummary,
   getTableSummary,
   getArtifactSummary,
+  getArtifactLibraryTreeIds,
   getNotebookDescendantIds,
   resolveMemoContentDoc,
   resolveMergedMemoTitle,
@@ -44,6 +45,10 @@ export type LocalMemoListParams = {
   limit?: number;
   offset?: number;
 };
+
+// Same rule as the server: workspace-wide views leave the Artifact Library out.
+const localArtifactTreeIds = async (scope: string) =>
+  getArtifactLibraryTreeIds(await localDb.notebooks.where("scope").equals(scope).toArray());
 
 export type LocalMemoListResponse = {
   memos: MemoSummary[];
@@ -252,9 +257,14 @@ export const listLocalMemos = async (scope: string, params: LocalMemoListParams)
   const q = params.q?.trim().toLocaleLowerCase();
   const tag = params.tag?.trim().toLocaleLowerCase();
 
+  const hiddenNotebookIds = !notebookIds?.length && !q && !tag && !params.trash
+    ? await localArtifactTreeIds(scope)
+    : null;
+
   memos = memos.filter((memo) => {
     if (memo.isDeleted !== Boolean(params.trash)) return false;
     if (notebookIds?.length && !notebookIds.includes(memo.notebookId)) return false;
+    if (hiddenNotebookIds?.has(memo.notebookId)) return false;
     if (tag && !memo.tags.some((memoTag) => memoTag.toLocaleLowerCase() === tag)) return false;
     if (params.filter === "tagged" && memo.tags.length === 0) return false;
     if (params.filter === "untagged" && memo.tags.length > 0) return false;
