@@ -7,7 +7,7 @@ import type {
   DesktopRpcParams,
   DesktopRpcResponses,
 } from "@edgeever/shared";
-import { docToMarkdown, docToText, findArtifactLibrary, markdownToDoc, type MemoDetail } from "@edgeever/shared";
+import { docToMarkdown, docToText, findArtifactLibrary, hasArtifactDocumentMarker, markdownToDoc, type MemoDetail } from "@edgeever/shared";
 import { localizeDefaultMemoTemplate } from "@edgeever/shared/memo-template-seeds";
 import type { EdgeEverRepository } from "@/lib/repository";
 import { api, getConfiguredDesktopApiBaseUrl } from "@/lib/api";
@@ -319,6 +319,15 @@ export const createDesktopRepository = (): EdgeEverRepository => ({
     return { memo: await repairDisplayedMemo((await request("memo.get", { memoId: result.memo.id, includeDeleted: false })).memo) };
   },
 
+  replaceArtifactContent: async (memo, file) => {
+    if (typeof navigator !== "undefined" && !navigator.onLine) throw new Error("artifact_replace_offline");
+    const result = await api.replaceArtifactContent(memo.id, file, { expectedRevision: memo.revision });
+    await request("sync.apply", {
+      changes: [{ entityType: "memo", operation: "upsert", entityId: result.memo.id, memo: result.memo, notebook: null }],
+    });
+    return { memo: await repairDisplayedMemo((await request("memo.get", { memoId: result.memo.id, includeDeleted: false })).memo) };
+  },
+
   createHtmlArtifact: async (file, input) => {
     if (typeof navigator !== "undefined" && !navigator.onLine) throw new Error("artifact_import_offline");
     // The server stores the HTML and creates the memo; the mirror then keeps it
@@ -458,6 +467,16 @@ export const createDesktopRepository = (): EdgeEverRepository => ({
     }
   },
   restoreMemoRevision: async (memoId, revisionId) => {
+    // The server refuses queued body saves for artifacts; only it restores their HTML.
+    const { memo: current } = await request("memo.get", { memoId, includeDeleted: false });
+    if (hasArtifactDocumentMarker(current?.contentMarkdown)) {
+      if (typeof navigator !== "undefined" && !navigator.onLine) throw new Error("artifact_restore_offline");
+      const restored = await api.restoreMemoRevision(memoId, revisionId);
+      await request("sync.apply", {
+        changes: [{ entityType: "memo", operation: "upsert", entityId: restored.memo.id, memo: restored.memo, notebook: null }],
+      });
+      return { memo: await repairDisplayedMemo((await request("memo.get", { memoId, includeDeleted: false })).memo) };
+    }
     const result = await request("memo.restoreRevision", { memoId, revisionId });
     window.dispatchEvent(new CustomEvent("edgeever:sync-queue-changed"));
     return { memo: toDisplayMemo(result.memo) };

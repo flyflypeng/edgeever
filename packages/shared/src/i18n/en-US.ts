@@ -1026,6 +1026,11 @@ export const enUS = {
     importMissingAssets: "{{name}}: missing local resources {{assets}}",
     dropTitle: "Drop to import HTML artifacts",
     dropDescription: "Supports several .html or .htm files, up to 20 MB each",
+    replaceContent: "Replace content…",
+    history: "Version history",
+    replaceFailed: "The content was not replaced. Please try again later.",
+    replaceOffline: "Replacing the content needs a connection. Check your network and try again.",
+    replaceConflict: "This artifact was updated elsewhere. Reload it before replacing the content.",
   },
   notebookTree: {
     dragNotebook: "Move notebook “{{name}}”",

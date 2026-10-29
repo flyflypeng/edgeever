@@ -1773,6 +1773,14 @@ export const createEdgeEverClient = (options: EdgeEverClientOptions = {}) => {
       return request<MemoResponse & { missingLocalAssets: string[] }>("/api/v1/artifacts", { method: "POST", body: form });
     },
 
+    /** Replaces an artifact's page with a new .html/.htm file as a new version. */
+    replaceArtifactContent: (memoId: string, file: File, payload: { expectedRevision?: number } = {}) => {
+      const form = new FormData();
+      form.append("file", file, file.name);
+      if (payload.expectedRevision !== undefined) form.append("expectedRevision", String(payload.expectedRevision));
+      return request<MemoResponse>(`/api/v1/artifacts/${encodeURIComponent(memoId)}/content`, { method: "PUT", body: form });
+    },
+
     duplicateMemo: (memoId: string, payload: { notebookId?: string; title?: string } = {}) =>
       request<MemoResponse>(`/api/v1/memos/${encodeURIComponent(memoId)}/duplicate`, {
         method: "POST",

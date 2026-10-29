@@ -412,3 +412,87 @@ describe("artifacts in the trash", () => {
       .toMatchObject({ status: 409, body: { error: { code: "notebook_not_empty" } } });
   });
 });
+
+describe("replace artifact content and restore revisions", () => {
+  const replace = (env, memoId, file, fields = {}) => {
+    const form = new FormData();
+    if (file) form.append("file", file);
+    for (const [key, value] of Object.entries(fields)) form.append(key, String(value));
+    return env.send("PUT", `/api/v1/artifacts/${memoId}/content`, { body: form });
+  };
+  const htmlResourceIdOf = (memo) => {
+    const encoded = /<!--\s*edgeever-artifact-v1:([A-Za-z0-9_-]+)\s*-->/.exec(memo.contentMarkdown)[1];
+    return JSON.parse(Buffer.from(encoded, "base64url").toString("utf8")).htmlResourceId;
+  };
+
+  test("replacing stores a new HTML resource, keeps the old one readable and snapshots the previous version", async () => {
+    const env = installation();
+    const library = await env.ensureLibrary();
+    const search = async (q) => (await env.request("GET", `/api/v1/memos?notebookId=${library.id}&q=${q}`)).body.memos.map((memo) => memo.id);
+    const firstHtml = "<title>Report</title><p>okapi first edition</p>";
+    const original = (await env.importArtifact(htmlFile(firstHtml, "report.html"))).body.memo;
+    const secondHtml = "<title>Ignored new title</title><p>gecko second edition</p>";
+
+    const replaced = await replace(env, original.id, htmlFile(secondHtml, "report-v2.html"), { expectedRevision: original.revision });
+
+    expect(replaced.status).toBe(200);
+    const memo = replaced.body.memo;
+    expect(memo).toMatchObject({ id: original.id, title: "Report", revision: original.revision + 1, contentText: "Ignored new title gecko second edition", artifact: { kind: "html", thumbnailStale: true } });
+    expect(htmlResourceIdOf(memo)).not.toBe(htmlResourceIdOf(original));
+    expect((await env.send("GET", `/api/v1/resources/${htmlResourceIdOf(memo)}/blob`)).body).toBe(secondHtml);
+    expect((await env.send("GET", `/api/v1/resources/${htmlResourceIdOf(original)}/blob`)).body).toBe(firstHtml);
+    expect(await search("gecko")).toEqual([original.id]);
+    expect(await search("okapi")).toEqual([]);
+
+    const revisions = (await env.request("GET", `/api/v1/memos/${original.id}/revisions`)).body.revisions;
+    expect(revisions.map((revision) => [revision.revision, htmlResourceIdOf(revision), revision.contentText]))
+      .toEqual([[original.revision, htmlResourceIdOf(original), "Report okapi first edition"]]);
+  });
+
+  test("restoring an earlier revision points the artifact back at its HTML and its search text", async () => {
+    const env = installation();
+    const library = await env.ensureLibrary();
+    const search = async (q) => (await env.request("GET", `/api/v1/memos?notebookId=${library.id}&q=${q}`)).body.memos.map((memo) => memo.id);
+    const firstHtml = "<p>okapi first edition</p>";
+    const original = (await env.importArtifact(htmlFile(firstHtml, "report.html"))).body.memo;
+    const replaced = (await replace(env, original.id, htmlFile("<p>gecko second edition</p>", "report.html"))).body.memo;
+    const [revision] = (await env.request("GET", `/api/v1/memos/${original.id}/revisions`)).body.revisions;
+
+    const restored = await env.request("POST", `/api/v1/memos/${original.id}/revisions/${revision.id}/restore`);
+
+    expect(restored.status).toBe(200);
+    expect(restored.body.memo).toMatchObject({ revision: replaced.revision + 1, contentText: "okapi first edition", artifact: { kind: "html" } });
+    expect(htmlResourceIdOf(restored.body.memo)).toBe(htmlResourceIdOf(original));
+    expect((await env.send("GET", `/api/v1/resources/${htmlResourceIdOf(restored.body.memo)}/blob`)).body).toBe(firstHtml);
+    expect(await search("okapi")).toEqual([original.id]);
+    expect(await search("gecko")).toEqual([]);
+    // The replaced version is kept in history, so it can be restored in turn.
+    const latest = (await env.request("GET", `/api/v1/memos/${original.id}/revisions`)).body.revisions[0];
+    expect(htmlResourceIdOf(latest)).toBe(htmlResourceIdOf(replaced));
+  });
+
+  test("replacing checks the revision, size, encoding and target like creating does", async () => {
+    const env = installation();
+    const original = (await env.importArtifact(htmlFile("<p>page</p>"))).body.memo;
+    const inboxId = await env.inboxId();
+    const note = (await env.request("POST", "/api/v1/memos", { notebookId: inboxId, title: "Note", contentMarkdown: "hello" })).body.memo;
+    const rejected = async (memoId, file, fields) => {
+      const response = await replace(env, memoId, file, fields);
+      return [response.status, response.body.error?.code];
+    };
+    const page = (bytes) => htmlFile("<p>" + "a".repeat(bytes - 7) + "</p>", "big.html");
+
+    expect(await rejected(original.id, htmlFile("<p>new</p>"), { expectedRevision: original.revision + 1 })).toEqual([409, "revision_conflict"]);
+    expect(await rejected(original.id, page(20 * MiB + 1))).toEqual([413, "artifact_too_large"]);
+    expect(await rejected(original.id, htmlFile(new Uint8Array([0x3c, 0x70, 0x3e, 0xff]), "latin1.html"))).toEqual([400, "artifact_invalid_html"]);
+    expect(await rejected(original.id, htmlFile("<p>x</p>", "notes.txt", "text/plain"))).toEqual([400, "artifact_invalid_html"]);
+    expect(await rejected(original.id, undefined)).toEqual([400, "bad_request"]);
+    expect(await rejected(note.id, htmlFile("<p>x</p>"))).toEqual([400, "bad_request"]);
+    expect(await rejected("memo_missing", htmlFile("<p>x</p>"))).toEqual([404, "not_found"]);
+
+    const unchanged = (await env.request("GET", `/api/v1/memos/${original.id}`)).body.memo;
+    expect(unchanged).toMatchObject({ revision: original.revision, contentMarkdown: original.contentMarkdown });
+    expect(await env.resourcesOf(original.id)).toHaveLength(1);
+    expect((await replace(env, original.id, page(20 * MiB))).status).toBe(200);
+  });
+});

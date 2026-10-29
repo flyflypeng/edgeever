@@ -1015,6 +1015,11 @@ export const ja = {
     importMissingAssets: "{{name}}：ローカルリソースがありません {{assets}}",
     dropTitle: "ドロップして HTML アーティファクトを読み込む",
     dropDescription: "複数の .html または .htm ファイルに対応（各 20MB まで）",
+    replaceContent: "内容を置き換え…",
+    history: "バージョン履歴",
+    replaceFailed: "内容を置き換えられませんでした。しばらくしてからもう一度お試しください。",
+    replaceOffline: "内容の置き換えにはネットワーク接続が必要です。接続を確認してもう一度お試しください。",
+    replaceConflict: "この成果物は別の場所で更新されています。再読み込みしてから置き換えてください。",
   },
   notebookTree: {
     dragNotebook: "ノートブック「{{name}}」を移動",
