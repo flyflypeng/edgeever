@@ -19,7 +19,7 @@ import {
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { Alert, Pressable, Text } from "../components/LocalizedText";
 import { ApiRequestError } from "@edgeever/client";
-import { DEFAULT_MEMO_TITLE, getNotebookScopeIds, hasDiagramDocumentMarker, markdownToDoc, type MemoDetail, type MemoSummary, type Notebook } from "@edgeever/shared";
+import { DEFAULT_MEMO_TITLE, getNotebookScopeIds, hasArtifactDocumentMarker, hasDiagramDocumentMarker, markdownToDoc, type MemoDetail, type MemoSummary, type Notebook } from "@edgeever/shared";
 import { MOBILE_UI_METRICS } from "@edgeever/shared/mobile-ui";
 import { clearMobileMemoDraft, readMobileMemoDraft, type MobileMemoDraft } from "../lib/mobile-drafts";
 import {
@@ -80,6 +80,7 @@ import { useMobileAutomaticSync } from "../hooks/useMobileAutomaticSync";
 import { useMobileLocalMirrorSync } from "../hooks/useMobileLocalMirrorSync";
 import { useMobileWorkspaceSelection } from "../hooks/useMobileWorkspaceSelection";
 import {
+  filterNotebooksByTree,
   flattenNotebooks,
   isEnglishMobileLocale,
 } from "./workspace-utils";
@@ -233,6 +234,8 @@ export const WorkspaceScreen = ({
   });
 
   const notebooks = notebooksQuery.data?.notebooks ?? [];
+  // New notes never go into the Artifact Library, so editors only offer the notebook tree.
+  const noteNotebooks = useMemo(() => filterNotebooksByTree(notebooks, "notes"), [notebooks]);
   useEffect(() => {
     const english = isEnglishMobileLocale(localePreference);
     const notebookIdForSlug = (slug: string, fallbackId: string) =>
@@ -519,11 +522,17 @@ export const WorkspaceScreen = ({
   const canToggleVisibleSelection = visibleMemos.length > 0;
   const allVisibleMemosSelected = canToggleVisibleSelection && visibleMemos.every((memo) => selectedMemoIds.has(memo.id));
   const nextSelectionPinValue = selectedMemos.some((memo) => !memo.isPinned);
+  // Artifacts only move between artifact folders, notes only between notebooks.
+  const selectionMoveNotebooks = filterNotebooksByTree(
+    notebooks,
+    selectedMemos.length > 0 && selectedMemos.every((memo) => memo.artifact) ? "artifacts" : "notes"
+  );
   const defaultMemoNotebookId = notebooks.find(
     (notebook) => notebook.id === "nb_inbox" || notebook.slug === "inbox" || notebook.name === "等待分类"
   )?.id ?? "";
+  // Inside the Artifact Library a new note falls back to the inbox.
   const createMemoNotebookId =
-    activeNotebookId !== ALL_NOTES_ID && notebooks.some((notebook) => notebook.id === activeNotebookId)
+    activeNotebookId !== ALL_NOTES_ID && noteNotebooks.some((notebook) => notebook.id === activeNotebookId)
       ? activeNotebookId
       : defaultMemoNotebookId;
   const canCreateMemo = memoView !== "trash" && Boolean(createMemoNotebookId);
@@ -884,6 +893,17 @@ export const WorkspaceScreen = ({
         tags: optimisticMemo.tags,
       };
 
+      // An artifact's body only changes through the artifact endpoints, and a
+      // queued save always carries the body, so the server would refuse it.
+      // Artifact metadata (tags, folder) is saved online or not at all.
+      if (hasArtifactDocumentMarker(syncBaseMemo.contentMarkdown)) {
+        if (!client) {
+          throw new Error("Client is not ready");
+        }
+        const response = await client.updateMemo(syncBaseMemo.id, { expectedRevision: syncBaseMemo.revision, ...payload });
+        return response.memo;
+      }
+
       // Online-first: push immediately when the instance is reachable so common
       // edits never sit in "待同步". Fall back to the durable outbox only when
       // the network or server cannot accept the write right now.
@@ -1226,7 +1246,7 @@ export const WorkspaceScreen = ({
         imageCompressionEnabled={imageCompressionEnabled}
         initialDraft={incomingClipDraft ?? createSeed}
         initialSharedImages={incomingShareImages}
-        notebooks={notebooks}
+        notebooks={noteNotebooks}
         onCreated={() => {
           setFinishCreateForIncomingShare(false);
           setCreateOpen(false);
@@ -1462,11 +1482,11 @@ export const WorkspaceScreen = ({
       {selectionMoveOpen ? <MoveSelectionModal
         bottomOffset={58 + safeAreaInsets.bottom}
         isMoving={moveMemosMutation.isPending}
-        notebooks={notebooks}
+        notebooks={selectionMoveNotebooks}
         onClose={() => setSelectionMoveOpen(false)}
         onMove={(notebookId) => moveMemosMutation.mutate({ memoIds: selectedMemoIdList, notebookId })}
         selectedCount={selectedMemoIds.size}
-        selectedNotebookId={activeNotebookId === ALL_NOTES_ID ? flattenNotebooks(notebooks)[0]?.notebook.id ?? "" : activeNotebookId}
+        selectedNotebookId={selectionMoveNotebooks.some((notebook) => notebook.id === activeNotebookId) ? activeNotebookId : flattenNotebooks(selectionMoveNotebooks)[0]?.notebook.id ?? ""}
         visible
       /> : null}
 

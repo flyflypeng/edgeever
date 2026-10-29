@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { MemoSummary, Notebook } from "@edgeever/shared";
 import {
   filterCollapsedNotebookOptions,
+  filterNotebooksByTree,
   formatMemoDetailDate,
   flattenNotebooks,
   getNotebookAncestorIds,
@@ -116,5 +117,18 @@ describe("mobile workspace utilities", () => {
 
     expect(sortMemoSummaries(memos, "title-asc").map((item) => item.id)).toEqual(["b", "a", "z"]);
     expect(sortMemoSummaries(memos, "title-desc").map((item) => item.id)).toEqual(["z", "b", "a"]);
+  });
+
+  test("keeps the Artifact Library tree and the notebook tree apart", () => {
+    const notebooks = [
+      { ...notebook("library", null, 0), systemKind: "artifact_library" as const },
+      notebook("folder", "library", 0),
+      notebook("inbox", null, 1),
+      notebook("project", "inbox", 0),
+    ];
+
+    expect(filterNotebooksByTree(notebooks, "notes").map((item) => item.id)).toEqual(["inbox", "project"]);
+    expect(filterNotebooksByTree(notebooks, "artifacts").map((item) => item.id)).toEqual(["library", "folder"]);
+    expect(filterNotebooksByTree([notebook("inbox", null, 0)], "artifacts")).toEqual([]);
   });
 });

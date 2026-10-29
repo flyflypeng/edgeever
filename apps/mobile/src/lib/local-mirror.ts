@@ -1,5 +1,7 @@
 import type { createEdgeEverClient, ListMemosResponse, MemoFilterMode, MemoSortMode } from "@edgeever/client";
 import {
+  getArtifactLibraryTreeIds,
+  getArtifactSummary,
   hasSyncStateReset,
   isSyncMetadataInitialized,
   splitSyncBootstrapWriteBatches,
@@ -116,6 +118,14 @@ export const listLocalMemos = async (scope: string, params: LocalMemoListParams)
   } else if (params.notebookId) {
     conditions.push("notebook_id = ?");
     binds.push(params.notebookId);
+  } else if (!params.q?.trim() && !params.tag?.trim() && !params.trash) {
+    // Same rule as the server: workspace-wide views leave the Artifact Library out.
+    const notebookRows = await db.getAllAsync<StoredMemoRow>(`SELECT data_json FROM mobile_notebooks WHERE scope = ?`, scope);
+    const hiddenNotebookIds = [...getArtifactLibraryTreeIds(notebookRows.map((row) => JSON.parse(row.data_json) as Notebook))];
+    if (hiddenNotebookIds.length) {
+      conditions.push(`notebook_id NOT IN (${hiddenNotebookIds.map(() => "?").join(", ")})`);
+      binds.push(...hiddenNotebookIds);
+    }
   }
   if (params.q?.trim()) {
     conditions.push("(title LIKE ? OR content_text LIKE ? OR tags_text LIKE ?)");
@@ -449,4 +459,5 @@ const toMemoSummary = (memo: MemoDetail): MemoSummary => ({
   createdAt: memo.createdAt,
   updatedAt: memo.updatedAt,
   deletedAt: memo.deletedAt,
+  ...getArtifactSummary(memo.contentMarkdown),
 });

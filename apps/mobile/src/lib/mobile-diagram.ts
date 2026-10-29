@@ -1,7 +1,9 @@
 import {
+  hasArtifactDocumentMarker,
   hasDiagramDocumentMarker,
   hasInfographicDocumentMarker,
   hasPosterDocumentMarker,
+  stripArtifactDocumentMarker,
   stripPosterDocumentMarker,
   hasTableDocumentMarker,
   markdownToDoc,
@@ -31,11 +33,15 @@ export const hasMobileInfographic = (contentMarkdown: string) =>
 
 export const hasMobilePoster = (contentMarkdown: string) => hasPosterDocumentMarker(contentMarkdown);
 
+/** HTML artifacts are never rendered natively; the reader shows their fallback body (thumbnail, hint, excerpt). */
+export const hasMobileArtifact = (contentMarkdown: string) => hasArtifactDocumentMarker(contentMarkdown);
+
 /** Viewer TipTap payload for a visual-diagram envelope. Valid IR is drawn by read-only X6, so this returns an empty doc instead of a hidden Mermaid projection. Invalid envelopes keep the stripped Mermaid fence as degraded content. */
 export const resolveMobileMemoViewerContent = (
   contentJson: TiptapDoc | null | undefined,
   contentMarkdown: string,
 ) => {
+  if (hasArtifactDocumentMarker(contentMarkdown)) return markdownToDoc(stripArtifactDocumentMarker(contentMarkdown));
   if (hasPosterDocumentMarker(contentMarkdown)) return markdownToDoc(stripPosterDocumentMarker(contentMarkdown));
   if (parseDiagramDocument(contentMarkdown)) {
     return { type: "doc", content: [{ type: "paragraph" }] } satisfies TiptapDoc;

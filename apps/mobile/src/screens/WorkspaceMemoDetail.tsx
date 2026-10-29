@@ -29,7 +29,7 @@ import { extractImagesFromTiptapDoc, type ImageSize, type PreviewImageItem } fro
 import { encodeMobileNoteImageFileUri } from "../lib/mobile-note-image-export";
 import { SAFE_DOM_WEBVIEW_PROPS } from "../lib/mobile-dom";
 import { getNextMobileNoteSearchIndex } from "../lib/mobile-note-search";
-import { hasMobilePoster, hasMobileInfographic, hasMobileStructuredTable, hasMobileVisualDiagram, resolveMobileMemoViewerContent } from "../lib/mobile-diagram";
+import { hasMobileArtifact, hasMobilePoster, hasMobileInfographic, hasMobileStructuredTable, hasMobileVisualDiagram, resolveMobileMemoViewerContent } from "../lib/mobile-diagram";
 import { safeDomCall } from "../lib/safe-dom-call";
 import {
   getMobileImageTarget,
@@ -53,7 +53,7 @@ import { useMobileTheme } from "../lib/mobile-theme";
 import { useSession } from "../lib/session";
 import { beginEditorStartup } from "../lib/startup-performance";
 import type { MobileSyncQueueItem } from "../lib/sync-queue";
-import { getTextSearchMatches, parseTags } from "./workspace-utils";
+import { filterNotebooksByTree, getTextSearchMatches, parseTags } from "./workspace-utils";
 import { styles } from "./workspace-styles";
 import { NotebookPickerModal, SmartTagButton, TagPickerModal } from "./WorkspacePickers";
 
@@ -572,7 +572,10 @@ export const MemoDetailModal = ({
     () => (memo ? hasMobileStructuredTable(memo.contentMarkdown) : false),
     [memo]
   );
-  const locksRichTextEdit = isVisualDiagram || isStructuredTable || Boolean(memo && (hasMobileInfographic(memo.contentMarkdown) || hasMobilePoster(memo.contentMarkdown)));
+  const isArtifact = Boolean(memo && hasMobileArtifact(memo.contentMarkdown));
+  const locksRichTextEdit = isArtifact || isVisualDiagram || isStructuredTable || Boolean(memo && (hasMobileInfographic(memo.contentMarkdown) || hasMobilePoster(memo.contentMarkdown)));
+  // Artifacts stay in the Artifact Library and notes stay out of it.
+  const viewerNotebookOptions = useMemo(() => filterNotebooksByTree(notebooks, isArtifact ? "artifacts" : "notes"), [isArtifact, notebooks]);
   const visualDiagramJson = useMemo(() => {
     const diagram = memo ? parseDiagramDocument(memo.contentMarkdown) : null;
     return diagram ? JSON.stringify(diagram) : undefined;
@@ -1508,6 +1511,15 @@ export const MemoDetailModal = ({
               <View style={styles.detailDivider} />
             </View>
             )}
+            {isArtifact && !isEditing ? (
+              <View style={detailLayoutStyles.artifactNotice}>
+                <Text style={detailLayoutStyles.artifactNoticeText}>
+                  {resolvedLocale !== "zh-CN"
+                    ? "This is an HTML artifact. Open it on the web or desktop to view the interactive content."
+                    : "这是一个 HTML 制品，请在 Web 或桌面端查看可交互内容。"}
+                </Text>
+              </View>
+            ) : null}
             {baseUrl ? (
               <LocalTiptapEditor
                 key={`${memo.id}:${viewerGeneration}`}
@@ -1583,12 +1595,14 @@ export const MemoDetailModal = ({
                 <Text style={styles.actionSheetTitle}>{getMobileCatalog(resolvedLocale).mobile.memoDetail.noteActions}</Text>
                 {!memo.isDeleted ? (
                   <>
-                    <DetailActionSheetItem
-                      disabled={isSharing}
-                      icon={isSharing ? <ActivityIndicator color="#16A06E" size="small" /> : <Share2 color="#0f172a" size={18} />}
-                      label={getMobileCatalog(resolvedLocale).mobile.memoDetail.shareNote}
-                      onPress={() => closeActionsAndRun(() => onShare(memo))}
-                    />
+                    {!isArtifact ? (
+                      <DetailActionSheetItem
+                        disabled={isSharing}
+                        icon={isSharing ? <ActivityIndicator color="#16A06E" size="small" /> : <Share2 color="#0f172a" size={18} />}
+                        label={getMobileCatalog(resolvedLocale).mobile.memoDetail.shareNote}
+                        onPress={() => closeActionsAndRun(() => onShare(memo))}
+                      />
+                    ) : null}
                     <DetailActionSheetItem
                       icon={<History color="#0f172a" size={18} />}
                       label={getMobileCatalog(resolvedLocale).editor.versionHistory}
@@ -1988,7 +2002,7 @@ export const MemoDetailModal = ({
             <NotebookPickerModal
               activeNotebookId={editor.notebookId}
               includeAllNotes={false}
-              notebooks={notebooks}
+              notebooks={viewerNotebookOptions}
               onClose={() => editor.setNotebookPickerOpen(false)}
               onSelect={(nextNotebookId) => {
                 if (!nextNotebookId || nextNotebookId === "all") {
@@ -2053,7 +2067,7 @@ export const MemoDetailModal = ({
           <NotebookPickerModal
             activeNotebookId={viewerNotebookId}
             includeAllNotes={false}
-            notebooks={notebooks}
+            notebooks={viewerNotebookOptions}
             onClose={() => {
               setViewerNotebookPickerOpen(false);
               setViewerTagsOpen(true);
@@ -2375,6 +2389,19 @@ const detailLayoutStyles = StyleSheet.create({
     backgroundColor: "#ffffff",
     flex: 1,
     minHeight: 0,
+  },
+  artifactNotice: {
+    backgroundColor: "#eff6ff",
+    borderRadius: 8,
+    marginHorizontal: 16,
+    marginTop: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  artifactNoticeText: {
+    color: "#1e3a8a",
+    fontSize: 13,
+    lineHeight: 19,
   },
   viewerDark: {
     backgroundColor: "#0f172a",
