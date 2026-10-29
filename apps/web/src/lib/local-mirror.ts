@@ -12,6 +12,8 @@ import {
   getTableSummary,
   getArtifactSummary,
   getArtifactLibraryTreeIds,
+  findArtifactLibrary,
+  hasArtifactDocumentMarker,
   getNotebookDescendantIds,
   resolveMemoContentDoc,
   resolveMergedMemoTitle,
@@ -869,11 +871,21 @@ export const deleteLocalMemo = async (scope: string, memoId: string, permanent =
   });
 };
 
+// Same rule as the server: an artifact whose folder is gone, or no longer in
+// the library, goes back to the library root. The server re-applies the rule
+// when the queued restore replays.
 export const restoreLocalMemo = async (scope: string, memoId: string) => {
   const memo = await getLocalMemo(scope, memoId);
   if (!memo) return;
+  let notebookId = memo.notebookId;
+  if (hasArtifactDocumentMarker(memo.contentMarkdown)) {
+    const notebooks = await localDb.notebooks.where("scope").equals(scope).toArray();
+    const library = findArtifactLibrary(notebooks);
+    if (library && !getArtifactLibraryTreeIds(notebooks).has(notebookId)) notebookId = library.id;
+  }
   await putLocalMemo(scope, {
     ...memo,
+    notebookId,
     isDeleted: false,
     deletedAt: null,
     updatedAt: new Date().toISOString(),

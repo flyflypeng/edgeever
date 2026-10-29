@@ -12,6 +12,7 @@ import { localizeDefaultMemoTemplate } from "@edgeever/shared/memo-template-seed
 import type { EdgeEverRepository } from "@/lib/repository";
 import { api, getConfiguredDesktopApiBaseUrl } from "@/lib/api";
 import { createStagedResourceListItem, mapMarkdownResourceUrls, mapTiptapResourceUrls, toApiResourceUrl, toDesktopResourceUrl } from "@/lib/desktop-resources";
+import { RESOURCE_UNAVAILABLE_OFFLINE } from "@/lib/local-resource-cache";
 import {
   applyStagedResourceUrlRewrites,
   collectStagedResourceReferences,
@@ -202,9 +203,18 @@ export const createDesktopRepository = (): EdgeEverRepository => ({
     return { resource: { ...result.resource, url: toDesktopResourceUrl(result.resource.url) } };
   },
 
-  readResource: async (resourceId) => (
-    await api.getResourceResponse(`/api/v1/resources/${encodeURIComponent(resourceId)}/blob`, { cache: "no-store" })
-  ).blob(),
+  // The main process keeps the bytes in the account's resource cache on first
+  // read and serves that copy from then on, also offline.
+  readResource: async (resourceId) => {
+    try {
+      const resource = await window.edgeeverDesktop!.readResource(resourceId);
+      return new Blob([resource.bytes as BlobPart], { type: resource.type });
+    } catch (error) {
+      // IPC wraps the main-process message, so match it inside the text.
+      if (error instanceof Error && error.message.includes(RESOURCE_UNAVAILABLE_OFFLINE)) throw new Error(RESOURCE_UNAVAILABLE_OFFLINE);
+      throw error;
+    }
+  },
 
   updateResource: async (resourceId, file, expectedContentHash) => {
     const result = await api.updateResourceContent(resourceId, file, expectedContentHash);

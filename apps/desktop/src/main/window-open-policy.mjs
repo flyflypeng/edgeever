@@ -15,6 +15,24 @@ export const isResourceDownloadUrl = (targetUrl) => {
   } catch { return false; }
 };
 
+/**
+ * What to do when a srcdoc iframe, such as the HTML artifact reader, follows a
+ * link. The page is never replaced: a web link opens in the system browser, as
+ * window.open already does; anything else, including a "#section" link that
+ * resolves against the app's own URL, goes nowhere. Returns null for
+ * navigations to leave alone.
+ */
+export const frameNavigationDecision = ({ url, isMainFrame, isSameDocument, frameUrl, appUrl }) => {
+  if (isMainFrame || isSameDocument || frameUrl !== "about:srcdoc" || url === "about:srcdoc") return null;
+  try {
+    const target = new URL(url);
+    const external = ["http:", "https:"].includes(target.protocol)
+      && !target.username && !target.password
+      && target.origin !== new URL(appUrl).origin;
+    return external ? { block: true, openExternal: target.toString() } : { block: true };
+  } catch { return { block: true }; }
+};
+
 export const isAllowedAppNavigation = (targetUrl, appUrl) => {
   try {
     const target = new URL(targetUrl);

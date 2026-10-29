@@ -43,9 +43,11 @@ const {
   replaceLocalMemoId,
   hasLocalSyncCursorRewound,
   syncLocalMirror,
+  restoreLocalMemo,
 } = await import("./local-mirror.ts");
 const { api } = await import("./api.ts");
 const { getCachedLocalResourceBytes } = await import("./local-resource-cache.ts");
+const { serializeArtifactDocument } = await import("@edgeever/shared");
 
 afterEach(async () => {
   await localDb.transaction(
@@ -323,6 +325,33 @@ describe("local mirror", () => {
     expect((await listLocalMemoActivity(scope, { notebookId: "nb-folder" })).memos.map((memo) => memo.id)).toEqual([artifact.id]);
     await putLocalMemo(scope, { ...artifact, isDeleted: true, deletedAt: "2026-10-05T00:00:00.000Z" });
     expect(await ids({ trash: true })).toEqual([artifact.id]);
+  });
+
+  test("restores an artifact whose folder is gone to the Artifact Library root, as the server does", async () => {
+    const scope = createLocalDataScope("https://demo.edgeever.org", "user-1");
+    const notebook = (id, parentId, systemKind = null) => ({
+      id, parentId, name: id, slug: id, icon: null, color: null, sortOrder: 0, memoCount: 0, lastMemoUpdatedAt: null,
+      createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z", systemKind,
+    });
+    const artifactMarkdown = serializeArtifactDocument({
+      schemaVersion: 1, kind: "html", htmlResourceId: "res_html", originalFilename: "page.html", byteSize: 10,
+      sha256: "a".repeat(64), source: { type: "upload" },
+    }, "page");
+    await putLocalNotebook(scope, notebook("nb-library", null, "artifact_library"));
+    await putLocalNotebook(scope, notebook("nb-folder", "nb-library"));
+    await putLocalNotebook(scope, notebook("nb-kept", "nb-library"));
+    const orphan = await createLocalMemo(scope, { notebookId: "nb-folder", title: "Orphan", contentMarkdown: artifactMarkdown });
+    const kept = await createLocalMemo(scope, { notebookId: "nb-kept", title: "Kept", contentMarkdown: artifactMarkdown });
+    const note = await createLocalMemo(scope, { notebookId: "nb-gone", title: "Plain note" });
+    expect(await applyLocalMemoDeleteBatch(scope, [orphan.id, kept.id, note.id])).toBe(3);
+    expect(await deleteLocalNotebook(scope, "nb-folder")).toBe(true);
+
+    for (const memo of [orphan, kept, note]) await restoreLocalMemo(scope, memo.id);
+
+    expect((await getLocalMemo(scope, orphan.id))?.notebookId).toBe("nb-library");
+    expect((await getLocalMemo(scope, kept.id))?.notebookId).toBe("nb-kept");
+    expect((await getLocalMemo(scope, note.id))?.notebookId).not.toBe("nb-library");
+    expect((await getLocalMemo(scope, orphan.id))?.isDeleted).toBe(false);
   });
 
   test("updates local content and preserves the memo identity", async () => {

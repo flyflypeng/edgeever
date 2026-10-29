@@ -1018,6 +1018,7 @@ export const zhCN = {
     deleteForever: "彻底删除",
     loading: "正在加载网页…",
     loadFailed: "没能加载这个网页。请检查网络后重试。",
+    offlineUnavailable: "这个网页还没在本设备上打开过，需要联网加载。联网后打开一次，之后离线也能查看。",
     updateFailed: "修改没有保存",
     importFailedTitle: "没能导入 HTML 制品",
     importInvalid: "只能导入 UTF-8 编码、内容不为空的 .html 或 .htm 文件。",

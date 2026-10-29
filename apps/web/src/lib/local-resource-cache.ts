@@ -1,5 +1,8 @@
 export const LOCAL_RESOURCE_CACHE_NAME = "edgeever-resource-blobs";
 
+/** Error message of a resource read that needs the network and has no cached copy. */
+export const RESOURCE_UNAVAILABLE_OFFLINE = "resource_unavailable_offline";
+
 const absoluteResourceUrl = (url: string) => {
   if (typeof window === "undefined" || !window.location?.origin) return url;
   return new URL(url, window.location.origin).toString();

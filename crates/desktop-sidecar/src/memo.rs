@@ -806,18 +806,36 @@ pub(crate) fn delete_memo(database: &Connection, params: &Value) -> Result<Value
     Ok(json!({ "ok": true }))
 }
 
+/// Same rule as the cloud API: an artifact whose folder is gone, or no longer
+/// in the library, goes back to the library root. The server re-applies the
+/// rule when the queued restore replays.
+const RESTORE_ARTIFACT_TO_LIBRARY: &str = "UPDATE memos
+    SET notebook_id = (SELECT id FROM notebooks WHERE system_kind = 'artifact_library' AND is_deleted = 0)
+  WHERE id = ?1
+    AND EXISTS (SELECT 1 FROM memo_contents c WHERE c.memo_id = memos.id AND instr(c.content_markdown, '<!-- edgeever-artifact-v1:') > 0)
+    AND EXISTS (SELECT 1 FROM notebooks WHERE system_kind = 'artifact_library' AND is_deleted = 0)
+    AND notebook_id NOT IN (
+      WITH RECURSIVE library_tree(id) AS (
+        SELECT id FROM notebooks WHERE system_kind = 'artifact_library' AND is_deleted = 0
+        UNION
+        SELECT n.id FROM notebooks n INNER JOIN library_tree t ON n.parent_id = t.id WHERE n.is_deleted = 0
+      )
+      SELECT id FROM library_tree
+    )";
+
 pub(crate) fn restore_memo(database: &Connection, params: &Value) -> Result<Value, String> {
     let memo_id = string_param(params, "memoId")?;
-    let changed = database.execute("UPDATE memos SET is_deleted = 0, deleted_at = NULL, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?1", [&memo_id]).map_err(|e| e.to_string())?;
+    let tx = database
+        .unchecked_transaction()
+        .map_err(|e| e.to_string())?;
+    let changed = tx.execute("UPDATE memos SET is_deleted = 0, deleted_at = NULL, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?1", [&memo_id]).map_err(|e| e.to_string())?;
     if changed == 0 {
         return Err(format!("Memo not found: {memo_id}"));
     }
-    enqueue_change(
-        database,
-        "memo.restore",
-        &memo_id,
-        &json!({ "memoId": memo_id }),
-    )?;
+    tx.execute(RESTORE_ARTIFACT_TO_LIBRARY, [&memo_id])
+        .map_err(|e| e.to_string())?;
+    enqueue_change(&tx, "memo.restore", &memo_id, &json!({ "memoId": memo_id }))?;
+    tx.commit().map_err(|e| e.to_string())?;
     memo_value(database, &memo_id, true)
 }
 
