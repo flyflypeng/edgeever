@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { ArrowLeft, Download, Maximize, RotateCw, Trash2 } from "lucide-react";
+import { ArrowLeft, Download, Maximize, RotateCcw, RotateCw, Trash2 } from "lucide-react";
 import { parseArtifactDocument, type MemoDetail } from "@edgeever/shared";
 import { Button } from "@/components/ui/button";
 import { IconTooltip } from "./editor/EditorPaneChrome";
@@ -28,6 +28,8 @@ export default function HtmlArtifactReader({
   onBackToList,
   onUpdated,
   onDelete,
+  onRestore,
+  onPermanentDelete,
 }: {
   memo: MemoDetail;
   repository: EdgeEverRepository;
@@ -35,6 +37,8 @@ export default function HtmlArtifactReader({
   onBackToList: () => void;
   onUpdated: (memo: MemoDetail) => Promise<void>;
   onDelete: (memoId: string) => void;
+  onRestore: (memoId: string) => void;
+  onPermanentDelete: (memoId: string) => void;
 }) {
   const { t } = useTranslation();
   const artifact = parseArtifactDocument(memo.contentMarkdown);
@@ -176,7 +180,20 @@ export default function HtmlArtifactReader({
               <Download className="h-4 w-4" />
             </Button>
           </IconTooltip>
-          {!readOnly && (
+          {readOnly ? (
+            <>
+              <IconTooltip label={t("htmlArtifact.restore")}>
+                <Button variant="ghost" size="icon" aria-label={t("htmlArtifact.restore")} onClick={() => onRestore(memo.id)}>
+                  <RotateCcw className="h-4 w-4" />
+                </Button>
+              </IconTooltip>
+              <IconTooltip label={t("htmlArtifact.deleteForever")}>
+                <Button variant="ghost" size="icon" className="text-rose-700" aria-label={t("htmlArtifact.deleteForever")} onClick={() => onPermanentDelete(memo.id)}>
+                  <Trash2 className="h-4 w-4" />
+                </Button>
+              </IconTooltip>
+            </>
+          ) : (
             <IconTooltip label={t("htmlArtifact.moveToTrash")}>
               <Button variant="ghost" size="icon" aria-label={t("htmlArtifact.moveToTrash")} onClick={() => onDelete(memo.id)}>
                 <Trash2 className="h-4 w-4" />

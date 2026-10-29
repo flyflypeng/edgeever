@@ -3866,6 +3866,8 @@ export const WorkspaceApp = ({
                             ]);
                           }}
                           onDelete={(memoId) => deleteMemoMutation.mutate({ memoId, permanent: false })}
+                          onRestore={(memoId) => restoreMemoMutation.mutate(memoId)}
+                          onPermanentDelete={(memoId) => setMemoDeleteConfirmation({ kind: "single", memoIds: [memoId], permanent: true })}
                         />
                       ) : selectedMemo && selectedDiagram ? (
                         <DiagramEditorPane

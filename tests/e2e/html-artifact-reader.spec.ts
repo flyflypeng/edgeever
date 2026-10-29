@@ -137,4 +137,14 @@ test("imports a local HTML file and renders it in an isolated, interactive sandb
   // Move to trash.
   await reader.getByRole("button", { name: "移入回收站" }).click();
   await expect(page.locator("[data-memo-id]").filter({ hasText: renamed })).toHaveCount(0);
+
+  // The artifact shows up in the trash, opens read-only and can be restored.
+  await page.getByRole("button", { name: "回收站" }).first().click();
+  const trashed = page.locator("[data-memo-id]").filter({ hasText: renamed });
+  await expect(trashed).toBeVisible();
+  await trashed.click();
+  await reader.getByRole("button", { name: "恢复制品" }).click();
+  await expect(trashed).toHaveCount(0);
+  await page.locator("[data-artifact-library-section]").getByRole("button").first().click();
+  await expect(page.locator("[data-memo-id]").filter({ hasText: renamed })).toBeVisible();
 });

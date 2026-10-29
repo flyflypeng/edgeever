@@ -1059,6 +1059,8 @@ export const ja = {
     fullscreen: "全画面表示（Esc で終了）",
     download: "HTML をダウンロード",
     moveToTrash: "ゴミ箱に移動",
+    restore: "成果物を復元",
+    deleteForever: "完全に削除",
     loading: "ページを読み込んでいます…",
     loadFailed: "ページを読み込めませんでした。接続を確認して、もう一度お試しください。",
     updateFailed: "変更は保存されませんでした",

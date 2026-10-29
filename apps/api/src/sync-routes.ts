@@ -57,6 +57,12 @@ const syncMemoNotebookIdSql = `CASE
       AND source_notebook.workspace_id = m.workspace_id
       AND source_notebook.is_deleted = 0
   ) THEN m.notebook_id
+  WHEN mc.content_markdown LIKE '%<!-- edgeever-artifact-v1:%' THEN COALESCE((
+    SELECT library.id FROM notebooks library
+    WHERE library.workspace_id = m.workspace_id
+      AND library.is_deleted = 0
+      AND library.system_kind = 'artifact_library'
+  ), m.notebook_id)
   ELSE COALESCE((
     SELECT inbox.id FROM notebooks inbox
     WHERE inbox.workspace_id = m.workspace_id
