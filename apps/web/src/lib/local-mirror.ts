@@ -11,6 +11,7 @@ import {
   getPosterSummary,
   getTableSummary,
   getArtifactSummary,
+  getArtifactLibraryTreeIds,
   getNotebookDescendantIds,
   resolveMemoContentDoc,
   resolveMergedMemoTitle,
@@ -59,6 +60,10 @@ export type LocalMemoActivityParams = {
 };
 
 const MEMO_ACTIVITY_LIMIT = 20000;
+
+// Same rule as the server: workspace-wide views leave the Artifact Library out.
+const localArtifactTreeIds = async (scope: string) =>
+  getArtifactLibraryTreeIds(await localDb.notebooks.where("scope").equals(scope).toArray());
 
 export type LocalMemoListResponse = {
   memos: MemoSummary[];
@@ -269,10 +274,14 @@ export const listLocalMemos = async (scope: string, params: LocalMemoListParams)
   const tag = params.tag?.trim().toLocaleLowerCase();
 
   const pinnedFirst = params.pinnedFirst !== false;
+  const hiddenNotebookIds = !notebookIds?.length && !q && !tag && !params.trash
+    ? await localArtifactTreeIds(scope)
+    : null;
 
   memos = memos.filter((memo) => {
     if (memo.isDeleted !== Boolean(params.trash)) return false;
     if (notebookIds?.length && !notebookIds.includes(memo.notebookId)) return false;
+    if (hiddenNotebookIds?.has(memo.notebookId)) return false;
     if (params.createdFrom && memo.createdAt < params.createdFrom) return false;
     if (params.createdTo && memo.createdAt >= params.createdTo) return false;
     if (tag && !memo.tags.some((memoTag) => memoTag.toLocaleLowerCase() === tag)) return false;
@@ -307,8 +316,10 @@ export const listLocalMemos = async (scope: string, params: LocalMemoListParams)
 
 /** Lightweight created-at and tag data for the jot heatmap and tag list. */
 export const listLocalMemoActivity = async (scope: string, params: LocalMemoActivityParams): Promise<MemoActivityResponse> => {
+  const hiddenNotebookIds = params.notebookId ? null : await localArtifactTreeIds(scope);
   const memos = (await localDb.memos.where("scope").equals(scope).toArray())
-    .filter((memo) => !memo.isDeleted && (!params.notebookId || memo.notebookId === params.notebookId))
+    .filter((memo) => !memo.isDeleted
+      && (params.notebookId ? memo.notebookId === params.notebookId : !hiddenNotebookIds?.has(memo.notebookId)))
     .sort((left, right) => right.createdAt.localeCompare(left.createdAt) || right.id.localeCompare(left.id))
     .slice(0, MEMO_ACTIVITY_LIMIT);
   return { memos: memos.map((memo) => ({ id: memo.id, createdAt: memo.createdAt, tags: memo.tags })) };

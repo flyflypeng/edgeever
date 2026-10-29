@@ -3572,6 +3572,12 @@ export const WorkspaceApp = ({
               onBackFromTrash={handleSelectAllMemos}
               onClearTag={handleSelectAllMemos}
               onOpenMemo={(memoId) => {
+                // Artifacts found by search or a tag open in the Agent Artifacts view.
+                const openedMemo = memoView === "notebook" ? memos.find((memo) => memo.id === memoId) : undefined;
+                if (openedMemo && artifactTreeIds.has(openedMemo.notebookId) && !(selectedNotebookId && artifactTreeIds.has(selectedNotebookId) && !selectedTag)) {
+                  handleOpenPluginNote(openedMemo.id, openedMemo.notebookId);
+                  return;
+                }
                 clearPendingMemoSelection();
                 if (shouldNavigateHomeWhenOpeningMemo(memoView)) {
                   navigateWorkspaceHome();
@@ -3768,10 +3774,13 @@ export const WorkspaceApp = ({
                             setSelectedMemoId(null);
                             setActivePane("memos");
                           }}
-                          onRenamed={async (memo) => {
+                          onUpdated={async (memo) => {
                             cacheMemoDetail(queryClient, memo, memoView);
                             updateMemoSummaryInLists(queryClient, memoToSummary(memo));
-                            await queryClient.invalidateQueries({ queryKey: ["memos"], refetchType: "inactive" });
+                            await Promise.all([
+                              queryClient.invalidateQueries({ queryKey: ["memos"], refetchType: "inactive" }),
+                              queryClient.invalidateQueries({ queryKey: ["tags"] }),
+                            ]);
                           }}
                           onDelete={(memoId) => deleteMemoMutation.mutate({ memoId, permanent: false })}
                         />

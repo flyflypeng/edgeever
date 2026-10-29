@@ -210,7 +210,7 @@ describe("memo list service", () => {
 
     expect(database.calls[0].sql).toContain("ORDER BY m.is_pinned DESC, m.created_at DESC, m.id DESC");
     expect(database.calls[0].sql).not.toContain("m.created_at >= ?");
-    expect(database.calls[0].parameters).toEqual(["ws_1", 101]);
+    expect(database.calls[0].parameters).toEqual(["ws_1", "ws_1", "ws_1", 101]);
     expect(result.memos[0]).not.toHaveProperty("contentMarkdown");
   });
 
@@ -288,6 +288,6 @@ describe("memo list service", () => {
     const workspace = createDatabase();
     await listMemoActivity(workspace, { workspaceId: "ws_1", notebookId: null });
     expect(workspace.calls[0].sql).not.toContain("notebook_id = ?");
-    expect(workspace.calls[0].parameters).toEqual(["ws_1", 20000]);
+    expect(workspace.calls[0].parameters).toEqual(["ws_1", "ws_1", "ws_1", 20000]);
   });
 });

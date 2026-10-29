@@ -303,6 +303,28 @@ describe("local mirror", () => {
     expect((await listLocalMemoActivity(scope, {})).memos.map((memo) => memo.id)).toEqual([newer.id, child.id, older.id]);
   });
 
+  test("leaves Artifact Library memos out of workspace-wide lists and activity, as the server does", async () => {
+    const scope = createLocalDataScope("https://demo.edgeever.org", "user-1");
+    const notebook = (id, parentId, systemKind = null) => ({
+      id, parentId, name: id, slug: id, icon: null, color: null, sortOrder: 0, memoCount: 0, lastMemoUpdatedAt: null,
+      createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z", systemKind,
+    });
+    await putLocalNotebook(scope, notebook("nb-library", null, "artifact_library"));
+    await putLocalNotebook(scope, notebook("nb-folder", "nb-library"));
+    const note = await createLocalMemo(scope, { notebookId: "nb-inbox", title: "Pangolin note", tags: ["shared"] });
+    const artifact = await createLocalMemo(scope, { notebookId: "nb-folder", title: "Pangolin page", tags: ["shared"] });
+    const ids = async (params) => (await listLocalMemos(scope, params)).memos.map((memo) => memo.id).sort();
+
+    expect(await ids({})).toEqual([note.id]);
+    expect((await listLocalMemoActivity(scope, {})).memos.map((memo) => memo.id)).toEqual([note.id]);
+    expect(await ids({ q: "pangolin" })).toEqual([note.id, artifact.id].sort());
+    expect(await ids({ tag: "shared" })).toEqual([note.id, artifact.id].sort());
+    expect(await ids({ notebookId: "nb-folder" })).toEqual([artifact.id]);
+    expect((await listLocalMemoActivity(scope, { notebookId: "nb-folder" })).memos.map((memo) => memo.id)).toEqual([artifact.id]);
+    await putLocalMemo(scope, { ...artifact, isDeleted: true, deletedAt: "2026-10-05T00:00:00.000Z" });
+    expect(await ids({ trash: true })).toEqual([artifact.id]);
+  });
+
   test("updates local content and preserves the memo identity", async () => {
     const scope = createLocalDataScope("https://demo.edgeever.org", "user-1");
     const memo = await createLocalMemo(scope, { notebookId: "nb-inbox" });

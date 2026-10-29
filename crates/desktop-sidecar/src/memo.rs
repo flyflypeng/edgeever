@@ -10,6 +10,17 @@ use crate::{
 /// Upper bound for `memo.activity`; matches the cloud API's truncation.
 const MEMO_ACTIVITY_LIMIT: i64 = 20_000;
 
+/// Same rule as the cloud API: workspace-wide lists and activity leave the
+/// Artifact Library subtree out.
+const OUTSIDE_ARTIFACT_LIBRARY: &str = "notebook_id NOT IN (
+    WITH RECURSIVE library_tree(id) AS (
+      SELECT id FROM notebooks WHERE system_kind = 'artifact_library'
+      UNION
+      SELECT n.id FROM notebooks n INNER JOIN library_tree t ON n.parent_id = t.id
+    )
+    SELECT id FROM library_tree
+  )";
+
 fn summary_from_row(row: &rusqlite::Row<'_>, with_content: bool) -> rusqlite::Result<Value> {
     let tags: String = row.get("tags_json")?;
     let markdown: String = row.get("content_markdown")?;
@@ -467,6 +478,16 @@ pub(crate) fn list_memos(database: &Connection, params: &Value) -> Result<Value,
         .max(0);
     // created_at is an ISO-8601 UTC string, so lexical comparison matches the
     // cloud API: createdFrom is inclusive and createdTo is exclusive.
+    let visibility = if notebook_id.is_none()
+        && notebook_ids_json == "[]"
+        && q.is_empty()
+        && tag.is_empty()
+        && !trash
+    {
+        format!(" AND m.{OUTSIDE_ARTIFACT_LIBRARY}")
+    } else {
+        String::new()
+    };
     let where_clause = format!(
         "m.is_deleted = ?1 AND (?2 = '' OR lower(COALESCE(m.title, '') || ' ' || m.excerpt || ' ' || c.content_text || ' ' || m.tags_json) LIKE '%' || lower(?2) || '%')
             AND (?3 IS NULL OR m.notebook_id = ?3)
@@ -476,7 +497,7 @@ pub(crate) fn list_memos(database: &Connection, params: &Value) -> Result<Value,
                 WHERE LOWER(TRIM(CAST(memo_tag.value AS TEXT))) = LOWER(?5)
             ))
             AND (?6 IS NULL OR m.created_at >= ?6)
-            AND (?7 IS NULL OR m.created_at < ?7){filter}"
+            AND (?7 IS NULL OR m.created_at < ?7){filter}{visibility}"
     );
     let query = format!("SELECT m.id, m.notebook_id, m.title, m.excerpt, m.tags_json, m.is_pinned, m.is_archived, m.is_deleted,
                 c.revision, m.created_at, m.updated_at, m.deleted_at, c.content_markdown
@@ -540,13 +561,13 @@ fn optional_trimmed_str<'a>(params: &'a Value, key: &str) -> Option<&'a str> {
 /// notebook itself is matched (no descendants) and trashed notes are skipped.
 pub(crate) fn list_memo_activity(database: &Connection, params: &Value) -> Result<Value, String> {
     let notebook_id = optional_trimmed_str(params, "notebookId");
-    let mut statement = database
-        .prepare(
-            "SELECT id, created_at, tags_json FROM memos
-              WHERE is_deleted = 0 AND (?1 IS NULL OR notebook_id = ?1)
-              ORDER BY created_at DESC, id DESC LIMIT ?2",
-        )
-        .map_err(|e| e.to_string())?;
+    let query = format!(
+        "SELECT id, created_at, tags_json FROM memos
+          WHERE is_deleted = 0 AND (?1 IS NOT NULL OR {OUTSIDE_ARTIFACT_LIBRARY})
+            AND (?1 IS NULL OR notebook_id = ?1)
+          ORDER BY created_at DESC, id DESC LIMIT ?2"
+    );
+    let mut statement = database.prepare(&query).map_err(|e| e.to_string())?;
     let memos = statement
         .query_map(rusqlite::params![notebook_id, MEMO_ACTIVITY_LIMIT], |row| {
             let tags: String = row.get("tags_json")?;
@@ -888,6 +909,9 @@ mod tests {
                    content_text TEXT NOT NULL,
                    revision INTEGER NOT NULL
                  );
+                 CREATE TABLE notebooks (id TEXT PRIMARY KEY, parent_id TEXT, system_kind TEXT);
+                 INSERT INTO notebooks (id, parent_id, system_kind) VALUES
+                   ('nb_inbox', NULL, NULL), ('nb_child', 'nb_inbox', NULL);
                  INSERT INTO memos (id, notebook_id, title, excerpt, tags_json, is_pinned, is_deleted, created_at, updated_at, deleted_at) VALUES
                    ('a', 'nb_inbox', NULL, 'alpha', '[\"x\"]', 0, 0, '2026-10-01T00:00:00.000Z', '2026-10-05T00:00:00.000Z', NULL),
                    ('b', 'nb_inbox', NULL, 'beta', '[]', 1, 0, '2026-10-02T00:00:00.000Z', '2026-10-03T00:00:00.000Z', NULL),
@@ -978,5 +1002,42 @@ mod tests {
             let workspace = list_memo_activity(&database, &params).unwrap();
             assert_eq!(ids(&workspace), vec!["d", "c", "b", "a"]);
         }
+    }
+
+    #[test]
+    fn workspace_lists_and_activity_leave_the_artifact_library_out() {
+        let database = jot_database();
+        database
+            .execute_batch(
+                "INSERT INTO notebooks (id, parent_id, system_kind) VALUES
+                   ('nb_library', NULL, 'artifact_library'), ('nb_folder', 'nb_library', NULL);
+                 INSERT INTO memos (id, notebook_id, title, excerpt, tags_json, is_pinned, is_deleted, created_at, updated_at, deleted_at) VALUES
+                   ('art', 'nb_folder', 'Page', 'alpha page', '[\"x\"]', 0, 0, '2026-10-08T00:00:00.000Z', '2026-10-08T00:00:00.000Z', NULL),
+                   ('art_trash', 'nb_library', 'Old', 'old page', '[]', 0, 1, '2026-10-08T00:00:00.000Z', '2026-10-08T00:00:00.000Z', '2026-10-09T00:00:00.000Z');
+                 INSERT INTO memo_contents (memo_id, content_markdown, content_text, revision)
+                   SELECT id, excerpt, excerpt, 1 FROM memos WHERE id LIKE 'art%';",
+            )
+            .unwrap();
+        let list = |params: Value| -> Vec<String> {
+            ids(&list_memos(&database, &params).unwrap())
+                .into_iter()
+                .map(str::to_owned)
+                .collect()
+        };
+        assert!(!list(json!({})).contains(&"art".to_owned()));
+        assert_eq!(list_memos(&database, &json!({})).unwrap()["totalCount"], 4);
+        assert!(!ids(&list_memo_activity(&database, &json!({})).unwrap()).contains(&"art"));
+        assert!(list(json!({ "q": "alpha" })).contains(&"art".to_owned()));
+        assert!(list(json!({ "tag": "x" })).contains(&"art".to_owned()));
+        assert_eq!(list(json!({ "notebookId": "nb_folder" })), vec!["art"]);
+        assert_eq!(
+            list(json!({ "notebookIds": ["nb_library", "nb_folder"] })),
+            vec!["art"]
+        );
+        assert!(list(json!({ "trash": true })).contains(&"art_trash".to_owned()));
+        assert_eq!(
+            ids(&list_memo_activity(&database, &json!({ "notebookId": "nb_folder" })).unwrap()),
+            vec!["art"]
+        );
     }
 }

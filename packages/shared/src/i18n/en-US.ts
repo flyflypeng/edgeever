@@ -1010,7 +1010,7 @@ export const enUS = {
     moveToTrash: "Move to trash",
     loading: "Loading the page…",
     loadFailed: "The page could not be loaded. Check your connection and try again.",
-    renameFailed: "The new title was not saved",
+    updateFailed: "The change was not saved",
     importFailedTitle: "Could not import the HTML artifact",
     importInvalid: "Only non-empty UTF-8 .html or .htm files can be imported.",
     importTooLarge: "HTML files can be at most 20 MB.",

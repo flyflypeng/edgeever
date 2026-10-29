@@ -91,10 +91,10 @@ export type EdgeEverRepository = {
   /** Imports an HTML file as an artifact on the server. Requires a connection. */
   createHtmlArtifact(file: File, input: { folderId?: string | null; locale?: string }): Promise<{ memo: MemoDetail }>;
   /**
-   * Saves an artifact's title without its body; the ordinary memo save always
-   * sends the body, which the server refuses for artifacts. Requires a connection.
+   * Saves an artifact's title or tags without its body; the ordinary memo save
+   * always sends the body, which the server refuses for artifacts. Requires a connection.
    */
-  renameArtifact(memo: MemoDetail, title: string): Promise<{ memo: MemoDetail }>;
+  updateArtifactMetadata(memo: MemoDetail, input: { title?: string; tags?: string[] }): Promise<{ memo: MemoDetail }>;
   listMemos(params: LocalMemoListParams): Promise<LocalMemoListResponse>;
   /** Created-at and tags of live notes in exactly one notebook (or the whole workspace when omitted). */
   listMemoActivity(params: LocalMemoActivityParams): Promise<MemoActivityResponse>;
@@ -485,9 +485,9 @@ export const createWebRepository = (scope: string): EdgeEverRepository => {
     return result;
   },
 
-  renameArtifact: async (memo, title) => {
-    if (isOffline()) throw new Error("artifact_rename_offline");
-    const result = await api.updateMemo(memo.id, { title, expectedRevision: memo.revision });
+  updateArtifactMetadata: async (memo, input) => {
+    if (isOffline()) throw new Error("artifact_update_offline");
+    const result = await api.updateMemo(memo.id, { ...input, expectedRevision: memo.revision });
     await putLocalMemo(scope, result.memo);
     return result;
   },

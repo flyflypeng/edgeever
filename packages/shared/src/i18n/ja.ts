@@ -999,7 +999,7 @@ export const ja = {
     moveToTrash: "ゴミ箱に移動",
     loading: "ページを読み込んでいます…",
     loadFailed: "ページを読み込めませんでした。接続を確認して、もう一度お試しください。",
-    renameFailed: "新しいタイトルは保存されませんでした",
+    updateFailed: "変更は保存されませんでした",
     importFailedTitle: "HTML 成果物を読み込めませんでした",
     importInvalid: "読み込めるのは、空でない UTF-8 の .html または .htm ファイルだけです。",
     importTooLarge: "HTML ファイルは 20MB までです。",

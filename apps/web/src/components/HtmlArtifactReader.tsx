@@ -4,10 +4,12 @@ import { ArrowLeft, Download, Maximize, RotateCw, Trash2 } from "lucide-react";
 import { parseArtifactDocument, type MemoDetail } from "@edgeever/shared";
 import { Button } from "@/components/ui/button";
 import { IconTooltip } from "./editor/EditorPaneChrome";
+import { EditorTagPicker } from "./EditorTagPicker";
 import { MemoTitleInput } from "./MemoTitleInput";
 import { MEMO_EDITOR_TOP_ROW_CLASS_NAME } from "./MemoEditorChromeDensity";
 import { downloadBlob } from "@/lib/infographic-image-export";
 import type { EdgeEverRepository } from "@/lib/repository";
+import { parseTagsText } from "@/lib/utils";
 
 /**
  * The page runs as an opaque origin: scripts, forms, dialogs, popups and
@@ -24,14 +26,14 @@ export default function HtmlArtifactReader({
   repository,
   readOnly,
   onBackToList,
-  onRenamed,
+  onUpdated,
   onDelete,
 }: {
   memo: MemoDetail;
   repository: EdgeEverRepository;
   readOnly: boolean;
   onBackToList: () => void;
-  onRenamed: (memo: MemoDetail) => Promise<void>;
+  onUpdated: (memo: MemoDetail) => Promise<void>;
   onDelete: (memoId: string) => void;
 }) {
   const { t } = useTranslation();
@@ -40,7 +42,8 @@ export default function HtmlArtifactReader({
   const [loadState, setLoadState] = useState<LoadState>({ status: "loading" });
   const [reloadKey, setReloadKey] = useState(0);
   const [title, setTitle] = useState(memo.title ?? "");
-  const [renameError, setRenameError] = useState(false);
+  const [updateError, setUpdateError] = useState(false);
+  const [tagsText, setTagsText] = useState(memo.tags.join(", "));
   const viewerRef = useRef<HTMLDivElement>(null);
   const savedTitleRef = useRef(memo.title ?? "");
 
@@ -48,6 +51,10 @@ export default function HtmlArtifactReader({
     setTitle(memo.title ?? "");
     savedTitleRef.current = memo.title ?? "";
   }, [memo.title]);
+
+  useEffect(() => {
+    setTagsText(memo.tags.join(", "));
+  }, [memo.tags]);
 
   useEffect(() => {
     if (!htmlResourceId) {
@@ -75,14 +82,25 @@ export default function HtmlArtifactReader({
       setTitle(savedTitleRef.current);
       return;
     }
-    setRenameError(false);
+    setUpdateError(false);
     savedTitleRef.current = next;
-    void repository.renameArtifact(memo, next)
-      .then((result) => onRenamed(result.memo))
+    void repository.updateArtifactMetadata(memo, { title: next })
+      .then((result) => onUpdated(result.memo))
       .catch(() => {
         savedTitleRef.current = memo.title ?? "";
         setTitle(memo.title ?? "");
-        setRenameError(true);
+        setUpdateError(true);
+      });
+  };
+
+  const commitTags = (value: string) => {
+    setTagsText(value);
+    setUpdateError(false);
+    void repository.updateArtifactMetadata(memo, { tags: parseTagsText(value) })
+      .then((result) => onUpdated(result.memo))
+      .catch(() => {
+        setTagsText(memo.tags.join(", "));
+        setUpdateError(true);
       });
   };
 
@@ -133,8 +151,16 @@ export default function HtmlArtifactReader({
             }}
           />
         </div>
-        <div className="flex shrink-0 items-center gap-1 pr-2">
-          {renameError && <span role="alert" className="text-xs text-rose-600">{t("htmlArtifact.renameFailed")}</span>}
+        <div className="flex min-w-0 shrink items-center gap-1 pr-2">
+          <EditorTagPicker
+            contentMarkdown={memo.contentText}
+            disabled={readOnly}
+            loadTags={() => repository.listTags()}
+            title={title}
+            value={tagsText}
+            onChange={commitTags}
+          />
+          {updateError && <span role="alert" className="shrink-0 text-xs text-rose-600">{t("htmlArtifact.updateFailed")}</span>}
           <IconTooltip label={t("htmlArtifact.reload")}>
             <Button variant="ghost" size="icon" aria-label={t("htmlArtifact.reload")} disabled={loadState.status !== "ready"} onClick={() => setReloadKey((key) => key + 1)}>
               <RotateCw className="h-4 w-4" />
