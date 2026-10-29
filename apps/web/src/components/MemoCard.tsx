@@ -1,8 +1,10 @@
 import { useRef, useState, useEffect, type DragEvent, type MouseEvent, type PointerEvent as ReactPointerEvent, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { useTranslation } from "react-i18next";
-import { FileCode2, FileText, Component, GitFork, PieChart, Table2, Workflow, Star, Check, MoreHorizontal, RotateCcw, Trash2 } from "lucide-react";
+import { FileText, Component, GitFork, PieChart, Table2, Workflow, Star, Check, MoreHorizontal, RotateCcw, Trash2 } from "lucide-react";
 import { getMemoListTimestamp, type MemoSummary } from "@edgeever/shared";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { toDesktopResourceUrl } from "@/lib/desktop-resources";
+import { formatRelativeTime } from "@/lib/relative-time";
 import { cn } from "@/lib/utils";
 import type { MemoListDensity, MemoSortMode } from "@/lib/app-helpers";
 import { isDefaultMemoTitle, MEMO_DRAG_MIME, setMemoDragPreview } from "@/lib/app-helpers";
@@ -38,6 +40,26 @@ const formatMemoPreviewDate = (value: string, locale: string, yesterdayLabel: st
   }).format(date);
 };
 
+/** The 16:10 first screen of an HTML artifact, or a skeleton until there is one. */
+const ArtifactThumbnail = ({ resourceId }: { resourceId: string | undefined }) => {
+  const [failedResourceId, setFailedResourceId] = useState<string | null>(null);
+  if (!resourceId || failedResourceId === resourceId) {
+    return <div className="aspect-[16/10] w-full animate-pulse rounded-md bg-slate-100" data-artifact-thumbnail-placeholder aria-hidden="true" />;
+  }
+  return (
+    <img
+      className="aspect-[16/10] w-full rounded-md border border-slate-200/70 bg-white object-cover object-top"
+      src={toDesktopResourceUrl(`/api/v1/resources/${encodeURIComponent(resourceId)}/blob`)}
+      alt=""
+      loading="lazy"
+      decoding="async"
+      draggable={false}
+      data-artifact-thumbnail
+      onError={() => setFailedResourceId(resourceId)}
+    />
+  );
+};
+
 export const MemoCard = ({
   memo,
   selected,
@@ -46,7 +68,7 @@ export const MemoCard = ({
   isLast = false,
   isTrashView,
   selectionMode,
-  listDensity,
+  listDensity: requestedListDensity,
   sortMode,
   multiSelectKeyDown,
   onOpen,
@@ -58,6 +80,7 @@ export const MemoCard = ({
   onOpenSelectionKeyboardContextMenu,
   onOpenKeyboardContextMenu,
   onToggle,
+  onArtifactThumbnailNeeded,
 }: {
   memo: MemoSummary;
   selected: boolean;
@@ -78,8 +101,12 @@ export const MemoCard = ({
   onOpenSelectionKeyboardContextMenu: (target: HTMLElement) => void;
   onOpenKeyboardContextMenu: (target: HTMLElement) => void;
   onToggle: (event?: MouseEvent<HTMLElement>) => void;
+  /** Called while an artifact card without an up-to-date thumbnail is on screen. */
+  onArtifactThumbnailNeeded?: (memo: MemoSummary) => void;
 }) => {
   const { t, i18n } = useTranslation();
+  // Artifact cards have one layout (style B); the list density does not apply to them.
+  const listDensity: MemoListDensity = memo.artifact ? "preview" : requestedListDensity;
   const handledModifierPointerRef = useRef(false);
   const longPressTimerRef = useRef<number | null>(null);
   const longPressPointRef = useRef<{ x: number; y: number } | null>(null);
@@ -92,11 +119,10 @@ export const MemoCard = ({
   const tableLabel = !diagramLabel && memo.structuredTable ? t("structuredTable.name") : null;
   const DiagramIcon = memo.diagramKind === "mind-map" ? GitFork : memo.diagramKind === "architecture" ? Component : Workflow;
   const listTimestamp = getMemoListTimestamp(memo, sortMode);
-  const listTimestampLabel = formatMemoPreviewDate(
-    listTimestamp.value,
-    i18n.resolvedLanguage ?? i18n.language,
-    t("memoCard.yesterday"),
-  );
+  const locale = i18n.resolvedLanguage ?? i18n.language;
+  const listTimestampLabel = memo.artifact
+    ? formatRelativeTime(listTimestamp.value, locale)
+    : formatMemoPreviewDate(listTimestamp.value, locale, t("memoCard.yesterday"));
   const showSelectionControl = selectionMode || checked || multiSelectKeyDown || modifierHoverActive;
   const selectionControlLabel = checked
     ? t("memoCard.unselect", { title: memoTitle })
@@ -120,6 +146,14 @@ export const MemoCard = ({
   };
 
   useEffect(() => () => resetLongPress(), []);
+
+  const artifactThumbnailStale = Boolean(memo.artifact?.thumbnailStale);
+  const artifactSha256 = memo.artifact?.sha256;
+  useEffect(() => {
+    if (artifactThumbnailStale && !isTrashView) onArtifactThumbnailNeeded?.(memo);
+    // Asks once per version of the page; the callback deduplicates repeats.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [artifactThumbnailStale, artifactSha256, isTrashView, memo.id]);
 
   useEffect(() => {
     if (!modifierHoverActive) {
@@ -415,11 +449,7 @@ export const MemoCard = ({
               ) : null}
             </div>
           ) : memo.artifact ? (
-            // Thumbnails arrive with card style B; until then every artifact shows the placeholder.
-            <div className="space-y-1.5">
-              <div className="aspect-[16/10] w-full rounded-md bg-slate-100" data-artifact-thumbnail-placeholder aria-hidden="true" />
-              <div className="flex items-center gap-1.5 text-xs text-slate-500"><FileCode2 className="h-3.5 w-3.5" aria-hidden="true" /><span>{t("htmlArtifact.name")}</span></div>
-            </div>
+            <ArtifactThumbnail resourceId={memo.artifact.thumbnailResourceId} />
           ) : memo.poster ? (
             <div className="flex items-center gap-1.5 text-xs text-slate-500"><FileText className="h-3.5 w-3.5" aria-hidden="true" /><span>{t("poster.name")}</span></div>
           ) : memo.infographic ? (

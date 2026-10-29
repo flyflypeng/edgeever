@@ -85,6 +85,8 @@ import {
 } from "@/lib/app-helpers";
 import { useBrowserBackLayer } from "@/lib/app-hooks";
 import { updateMemoSummaryInLists } from "@/lib/memo-list-cache";
+import { createArtifactThumbnailQueue } from "@/lib/html-artifact-thumbnails";
+import { isLocalMemoId } from "@/lib/local-mirror";
 import {
   cacheMemoDetail,
   evictIdleMemoDetails,
@@ -2177,6 +2179,20 @@ export const WorkspaceApp = ({
       .then(createDiagramMemo);
   };
 
+  // One queue per workspace session: each version of a page is rendered at most once.
+  const artifactThumbnailQueue = useMemo(() => createArtifactThumbnailQueue({
+    readResource: (resourceId) => repository.readResource(resourceId),
+    uploadThumbnail: (memoId, image, sourceSha256) => repository.uploadArtifactThumbnail(memoId, image, sourceSha256),
+    onUploaded: (memo) => {
+      updateMemoSummaryInLists(queryClient, memoToSummary(memo));
+      queryClient.setQueriesData<{ memo: MemoDetail }>({ queryKey: ["memo", memo.id] }, (current) => (current ? { memo } : current));
+    },
+  }), [queryClient, repository]);
+  const requestArtifactThumbnail = useCallback((memo: MemoSummary) => {
+    if (!memo.artifact?.thumbnailStale || isLocalMemoId(memo.id)) return;
+    artifactThumbnailQueue.request({ memoId: memo.id, artifact: memo.artifact });
+  }, [artifactThumbnailQueue]);
+
   // Each file imports on its own: one that fails is reported and the rest still land.
   const importHtmlArtifactsMutation = useMutation({
     mutationFn: async (files: File[]) => {
@@ -2217,6 +2233,8 @@ export const WorkspaceApp = ({
         await queryClient.invalidateQueries({ queryKey: ["notebooks"] });
         for (const memo of imported.slice(0, -1)) updateMemoSummaryInLists(queryClient, memoToSummary(memo));
         revealCreatedMemo(imported[imported.length - 1]);
+        // Render the new cards' thumbnails now instead of waiting for them to scroll into view.
+        for (const memo of imported) requestArtifactThumbnail(memoToSummary(memo));
       }
       if (results.length === 1 && failed.length === 1) {
         setAppNoticeDialog({ title: t("htmlArtifact.importFailedTitle"), description: importFailureReason(failed[0].errorCode) });
@@ -3673,6 +3691,7 @@ export const WorkspaceApp = ({
               onCreateMemo={handleCreateMemo}
               onImportMarkdownFiles={(files) => void handleImportMarkdownFiles(files)}
               onImportHtmlArtifactFiles={handleImportHtmlArtifactFiles}
+              onArtifactThumbnailNeeded={requestArtifactThumbnail}
               onClearSelection={clearMemoSelection}
               onEnterSelectionMode={enterMemoSelectionMode}
               onReplaceSelection={replaceMemoSelection}

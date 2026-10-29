@@ -110,9 +110,9 @@ fn artifact_summary(markdown: &str) -> Option<Value> {
         Some(value) => Some(value.as_str().filter(|text| is_sha256(text))?),
     };
     let source = document.get("source")?.as_object()?;
+    let html_resource_id = bounded("htmlResourceId", 160)?;
     let valid = document.get("schemaVersion").and_then(Value::as_u64) == Some(1)
         && document.get("kind").and_then(Value::as_str) == Some("html")
-        && bounded("htmlResourceId", 160).is_some()
         && bounded("originalFilename", 255).is_some()
         && (1..=20 * 1024 * 1024).contains(&byte_size)
         && matches!(
@@ -125,6 +125,8 @@ fn artifact_summary(markdown: &str) -> Option<Value> {
     }
     let mut summary = Map::new();
     summary.insert("kind".to_owned(), json!("html"));
+    summary.insert("htmlResourceId".to_owned(), json!(html_resource_id));
+    summary.insert("sha256".to_owned(), json!(sha256));
     if let Some(id) = thumbnail_id {
         summary.insert("thumbnailResourceId".to_owned(), json!(id));
     }
@@ -716,7 +718,7 @@ mod tests {
         let plain = note_list_metadata(&wrap("edgeever-artifact-v1", &document("")));
         assert_eq!(
             plain["artifact"],
-            serde_json::json!({ "kind": "html", "thumbnailStale": true })
+            serde_json::json!({ "kind": "html", "htmlResourceId": "res_html", "sha256": sha, "thumbnailStale": true })
         );
         let fresh = note_list_metadata(&wrap(
             "edgeever-artifact-v1",
@@ -726,7 +728,7 @@ mod tests {
         ));
         assert_eq!(
             fresh["artifact"],
-            serde_json::json!({ "kind": "html", "thumbnailResourceId": "res_thumb", "thumbnailStale": false })
+            serde_json::json!({ "kind": "html", "htmlResourceId": "res_html", "sha256": sha, "thumbnailResourceId": "res_thumb", "thumbnailStale": false })
         );
         for markdown in [
             "ordinary note".to_owned(),

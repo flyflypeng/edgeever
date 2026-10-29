@@ -328,6 +328,15 @@ export const createDesktopRepository = (): EdgeEverRepository => ({
     return { memo: await repairDisplayedMemo((await request("memo.get", { memoId: result.memo.id, includeDeleted: false })).memo) };
   },
 
+  uploadArtifactThumbnail: async (memoId, image, sourceSha256) => {
+    if (typeof navigator !== "undefined" && !navigator.onLine) throw new Error("artifact_thumbnail_offline");
+    const result = await api.uploadArtifactThumbnail(memoId, image, sourceSha256);
+    await request("sync.apply", {
+      changes: [{ entityType: "memo", operation: "upsert", entityId: result.memo.id, memo: result.memo, notebook: null }],
+    });
+    return { memo: await repairDisplayedMemo((await request("memo.get", { memoId: result.memo.id, includeDeleted: false })).memo) };
+  },
+
   createHtmlArtifact: async (file, input) => {
     if (typeof navigator !== "undefined" && !navigator.onLine) throw new Error("artifact_import_offline");
     // The server stores the HTML and creates the memo; the mirror then keeps it

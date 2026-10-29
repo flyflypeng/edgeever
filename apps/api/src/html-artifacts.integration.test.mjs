@@ -496,3 +496,95 @@ describe("replace artifact content and restore revisions", () => {
     expect((await replace(env, original.id, page(20 * MiB))).status).toBe(200);
   });
 });
+
+describe("artifact thumbnails", () => {
+  const webp = (bytes = [1, 2, 3]) => new File([new Uint8Array(bytes)], "thumbnail.webp", { type: "image/webp" });
+  const uploadThumbnail = (env, memoId, image, sourceSha256) => {
+    const form = new FormData();
+    if (image) form.append("image", image);
+    if (sourceSha256 !== undefined) form.append("sourceSha256", sourceSha256);
+    return env.send("PUT", `/api/v1/artifacts/${memoId}/thumbnail`, { body: form });
+  };
+  const replace = (env, memoId, file, thumbnail) => {
+    const form = new FormData();
+    form.append("file", file);
+    if (thumbnail) form.append("thumbnail", thumbnail);
+    return env.send("PUT", `/api/v1/artifacts/${memoId}/content`, { body: form });
+  };
+  test("uploading a thumbnail for the current HTML makes it fresh and replaces the previous one", async () => {
+    const env = installation();
+    const created = (await env.importArtifact(htmlFile("<p>page</p>"))).body.memo;
+    expect(created.artifact).toMatchObject({ thumbnailStale: true });
+    expect(created.artifact.sha256).toMatch(/^[0-9a-f]{64}$/);
+    expect(created.artifact.thumbnailResourceId).toBeUndefined();
+
+    const first = await uploadThumbnail(env, created.id, webp([1, 1]), created.artifact.sha256);
+    expect(first.status).toBe(200);
+    expect(first.body.memo).toMatchObject({ revision: created.revision + 1, artifact: { thumbnailStale: false } });
+    const firstThumbnailId = first.body.memo.artifact.thumbnailResourceId;
+    const image = await env.send("GET", `/api/v1/resources/${firstThumbnailId}/blob`);
+    expect(image.status).toBe(200);
+    expect(image.headers.get("Content-Type")).toBe("image/webp");
+    // Other clients and mobile show it in the fallback body.
+    expect(first.body.memo.contentMarkdown).toContain(`/api/v1/resources/${firstThumbnailId}/blob`);
+    const listed = (await env.request("GET", `/api/v1/memos?notebookId=${created.notebookId}`)).body.memos[0];
+    expect(listed.artifact).toMatchObject({ thumbnailResourceId: firstThumbnailId, thumbnailStale: false });
+
+    const second = await uploadThumbnail(env, created.id, webp([2, 2]), created.artifact.sha256);
+    expect(second.status).toBe(200);
+    const secondThumbnailId = second.body.memo.artifact.thumbnailResourceId;
+    expect(secondThumbnailId).not.toBe(firstThumbnailId);
+    expect((await env.resourcesOf(created.id)).map((resource) => resource.id).sort())
+      .toEqual([created.artifact.htmlResourceId, secondThumbnailId].sort());
+    // A thumbnail is not a content change: no version snapshot is taken.
+    expect((await env.request("GET", `/api/v1/memos/${created.id}/revisions`)).body.revisions).toEqual([]);
+  });
+
+  test("a thumbnail rendered from an older HTML is refused with 409 artifact_thumbnail_stale", async () => {
+    const env = installation();
+    const created = (await env.importArtifact(htmlFile("<p>v1</p>"))).body.memo;
+    const replaced = (await replace(env, created.id, htmlFile("<p>v2</p>"))).body.memo;
+    expect(replaced.artifact.sha256).not.toBe(created.artifact.sha256);
+
+    const stale = await uploadThumbnail(env, created.id, webp(), created.artifact.sha256);
+
+    expect(stale).toMatchObject({ status: 409, body: { error: { code: "artifact_thumbnail_stale" } } });
+    expect(await env.resourcesOf(created.id)).toHaveLength(2);
+    expect((await env.request("GET", `/api/v1/memos/${created.id}`)).body.memo).toMatchObject({
+      revision: replaced.revision,
+      artifact: { thumbnailStale: true },
+    });
+    expect((await uploadThumbnail(env, created.id, webp(), replaced.artifact.sha256)).status).toBe(200);
+  });
+
+  test("rejects missing fields, non-images, ordinary notes and unknown memos", async () => {
+    const env = installation();
+    const created = (await env.importArtifact(htmlFile("<p>page</p>"))).body.memo;
+    const note = (await env.request("POST", "/api/v1/memos", { notebookId: await env.inboxId(), title: "Note", contentMarkdown: "hello" })).body.memo;
+    const rejected = async (memoId, image, sha) => {
+      const response = await uploadThumbnail(env, memoId, image, sha);
+      return [response.status, response.body.error?.code];
+    };
+    const sha = created.artifact.sha256;
+
+    expect(await rejected(created.id, undefined, sha)).toEqual([400, "bad_request"]);
+    expect(await rejected(created.id, webp(), undefined)).toEqual([400, "bad_request"]);
+    expect(await rejected(created.id, new File(["<p>x</p>"], "x.html", { type: "text/html" }), sha)).toEqual([415, "unsupported_media_type"]);
+    expect(await rejected(note.id, webp(), sha)).toEqual([400, "bad_request"]);
+    expect(await rejected("memo_missing", webp(), sha)).toEqual([404, "not_found"]);
+    expect(await env.resourcesOf(created.id)).toHaveLength(1);
+  });
+
+  test("create and replace accept an optional thumbnail rendered from the uploaded HTML", async () => {
+    const env = installation();
+    const created = await env.importArtifact(htmlFile("<p>v1</p>"), { thumbnail: webp([3]) });
+    expect(created.status).toBe(201);
+    expect(created.body.memo.artifact).toMatchObject({ thumbnailStale: false });
+    expect(created.body.memo.artifact.thumbnailResourceId).toBeString();
+
+    const replaced = await replace(env, created.body.memo.id, htmlFile("<p>v2</p>"), webp([4]));
+    expect(replaced.status).toBe(200);
+    expect(replaced.body.memo.artifact).toMatchObject({ thumbnailStale: false });
+    expect(replaced.body.memo.artifact.thumbnailResourceId).not.toBe(created.body.memo.artifact.thumbnailResourceId);
+  });
+});

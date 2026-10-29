@@ -19,7 +19,8 @@ import { createMemoRevisionStatement } from "./memo-revision-service";
 import { upsertMemoSearchDocumentStatement } from "./memo-search-index";
 import { createMemoRecord, getMemoDetail, getMemoDetailRow } from "./memo-service";
 import { ensureArtifactLibrary, findArtifactLibrary, findArtifactLibraryAncestorId, MEMO_LOCATION_INVALID } from "./notebook-service";
-import { createAttachmentResource, normalizeFilename } from "./resource-service";
+import { deleteStoredObjects } from "./object-storage";
+import { createAttachmentResource, createImageResource, normalizeFilename } from "./resource-service";
 import type { DatabaseAdapter } from "./storage-contract";
 
 /** Upper bound of the visible text an artifact indexes for search, in UTF-8 bytes. */
@@ -309,6 +310,97 @@ export const replaceHtmlArtifactContent = async (context: AppContext, input: Rep
 
   const memo = await getMemoDetail(db, input.workspaceId, input.memoId);
   if (!memo) throw new AppError("not_found", "Memo not found after replacing its content", 404);
+  return memo;
+};
+
+/** Thumbnails are raster images only; an SVG could carry its own scripts and links. */
+export const ARTIFACT_THUMBNAIL_MIME_TYPES: Record<string, true> = { "image/webp": true, "image/png": true, "image/jpeg": true };
+
+export type SetArtifactThumbnailInput = {
+  workspaceId: string;
+  memoId: string;
+  bytes: Uint8Array;
+  mimeType: string;
+  filename: string;
+  /** The `sha256` of the HTML the image was rendered from. */
+  sourceSha256: string;
+  actor: AuditActor;
+  actorLabel: string;
+};
+
+/**
+ * Stores a first-screen image of an artifact's page and points the envelope at
+ * it. An image rendered from another version of the HTML is refused, so a
+ * client that finished late never covers a newer page with an old picture.
+ * This is not a content change: no version is snapshotted and the memo keeps
+ * its place in "recently updated" lists. The previous thumbnail is removed.
+ */
+export const setArtifactThumbnail = async (context: AppContext, input: SetArtifactThumbnailInput): Promise<MemoDetail> => {
+  const db = context.env.storage.db;
+  const current = await getMemoDetailRow(db, input.workspaceId, input.memoId);
+  if (!current) throw new AppError("not_found", "Memo not found", 404);
+  const previous = parseArtifactDocument(current.content_markdown);
+  if (!previous) throw new AppError("bad_request", "Only HTML artifacts have thumbnails.", 400);
+  const stale = () => new AppError("artifact_thumbnail_stale", "The thumbnail was rendered from another version of this page.", 409);
+  if (input.sourceSha256 !== previous.sha256) throw stale();
+  if (!ARTIFACT_THUMBNAIL_MIME_TYPES[input.mimeType]) {
+    throw new AppError("unsupported_media_type", "Thumbnails must be WebP, PNG or JPEG images.", 415);
+  }
+
+  const thumbnail = await createImageResource(context, {
+    memoId: input.memoId,
+    filename: input.filename,
+    mimeType: input.mimeType,
+    bytes: input.bytes,
+    actor: input.actor,
+    workspaceId: input.workspaceId,
+    source: "upload",
+  });
+  const document: ArtifactDocument = { ...previous, thumbnailResourceId: thumbnail.id, thumbnailSha256: input.sourceSha256 };
+  const contentMarkdown = artifactContentMarkdown(document, current.content_text);
+  const contentJson = markdownToDoc(contentMarkdown);
+  const contentHash = await sha256(contentMarkdown + JSON.stringify(contentJson));
+  const now = isoNow();
+  const storedObject = (resourceId: string) =>
+    db.prepare(`SELECT object_key, storage_config_id FROM resources WHERE id = ? AND memo_id = ?`)
+      .bind(resourceId, input.memoId)
+      .first<{ object_key: string; storage_config_id: string }>();
+  const previousThumbnail = previous.thumbnailResourceId ? await storedObject(previous.thumbnailResourceId) : null;
+
+  // Only the version the image was checked against may be updated; anything
+  // that changed the memo in between wins and the new image is dropped.
+  const [updated] = await db.batch([
+    db.prepare(
+      `UPDATE memo_contents
+       SET content_json = ?, content_markdown = ?, content_hash = ?, revision = revision + 1, updated_at = ?
+       WHERE memo_id = ? AND revision = ?`,
+    ).bind(JSON.stringify(contentJson), contentMarkdown, contentHash, now, input.memoId, current.revision),
+    // Touching the row records a sync change; updated_at stays, so lists keep their order.
+    db.prepare(
+      `UPDATE memos SET updated_at = updated_at
+       WHERE id = ? AND workspace_id = ? AND EXISTS (SELECT 1 FROM memo_contents WHERE memo_id = ? AND content_hash = ?)`,
+    ).bind(input.memoId, input.workspaceId, input.memoId, contentHash),
+    ...(previous.thumbnailResourceId
+      ? [db.prepare(
+          `DELETE FROM resources
+           WHERE id = ? AND memo_id = ? AND EXISTS (SELECT 1 FROM memo_contents WHERE memo_id = ? AND content_hash = ?)`,
+        ).bind(previous.thumbnailResourceId, input.memoId, input.memoId, contentHash)]
+      : []),
+    auditStatement(db, input.actor.actorType, input.actor.actorId, "artifact.thumbnail", "memo", input.memoId, {
+      thumbnailResourceId: thumbnail.id,
+      sourceSha256: input.sourceSha256,
+    }),
+  ]);
+  if (Number(updated?.meta.changes) !== 1) {
+    const orphan = await storedObject(thumbnail.id);
+    await db.prepare(`DELETE FROM resources WHERE id = ?`).bind(thumbnail.id).run();
+    if (orphan) await deleteStoredObjects(context.env, [orphan]).catch(() => undefined);
+    throw stale();
+  }
+  if (previousThumbnail) await deleteStoredObjects(context.env, [previousThumbnail]).catch(() => undefined);
+
+  const memo = await getMemoDetail(db, input.workspaceId, input.memoId);
+  if (!memo) throw new AppError("not_found", "Memo not found after storing its thumbnail", 404);
   return memo;
 };
 

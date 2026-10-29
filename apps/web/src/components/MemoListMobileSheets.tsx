@@ -77,7 +77,8 @@ export const MobileListActionsSheet = ({
   canSelectMemos: boolean;
   isSelectionMode: boolean;
   listDescription: string;
-  listDensity: MemoListDensity;
+  /** `null` hides the display-mode choice, as for HTML artifacts' single card layout. */
+  listDensity: MemoListDensity | null;
   listTitle: string;
   sortMode: MemoSortMode;
   view: string;
@@ -128,33 +129,37 @@ export const MobileListActionsSheet = ({
             </>
           )}
 
-          <div className="px-3 py-2 text-xs font-semibold text-slate-400">{t("mobileSheets.displayMode")}</div>
-          <ToggleGroup
-            className="flex-col items-stretch"
-            type="single"
-            value={listDensity}
-            onValueChange={(value) => {
-              if (value) {
-                onListDensityChange(value as MemoListDensity);
-              }
-            }}
-          >
-            {memoListDensityOptions.map((option) => (
-              <ToggleGroupItem
-                key={option.value}
-                className="h-11 w-full justify-start gap-3 rounded-md px-3 text-left text-sm data-[state=on]:bg-workspace-selection data-[state=on]:text-slate-950"
-                size="default"
-                value={option.value}
-                aria-label={option.label}
+          {listDensity !== null && (
+            <>
+              <div className="px-3 py-2 text-xs font-semibold text-slate-400">{t("mobileSheets.displayMode")}</div>
+              <ToggleGroup
+                className="flex-col items-stretch"
+                type="single"
+                value={listDensity}
+                onValueChange={(value) => {
+                  if (value) {
+                    onListDensityChange(value as MemoListDensity);
+                  }
+                }}
               >
-                <span className={listDensity === option.value ? "text-slate-950" : "text-slate-500"}>{option.icon}</span>
-                <span className="min-w-0 flex-1 truncate">{option.label}</span>
-                <CheckCircleCheck className={cn("h-4 w-4 shrink-0", listDensity === option.value ? "text-slate-950" : "text-transparent")} />
-              </ToggleGroupItem>
-            ))}
-          </ToggleGroup>
+                {memoListDensityOptions.map((option) => (
+                  <ToggleGroupItem
+                    key={option.value}
+                    className="h-11 w-full justify-start gap-3 rounded-md px-3 text-left text-sm data-[state=on]:bg-workspace-selection data-[state=on]:text-slate-950"
+                    size="default"
+                    value={option.value}
+                    aria-label={option.label}
+                  >
+                    <span className={listDensity === option.value ? "text-slate-950" : "text-slate-500"}>{option.icon}</span>
+                    <span className="min-w-0 flex-1 truncate">{option.label}</span>
+                    <CheckCircleCheck className={cn("h-4 w-4 shrink-0", listDensity === option.value ? "text-slate-950" : "text-transparent")} />
+                  </ToggleGroupItem>
+                ))}
+              </ToggleGroup>
 
-          <div className="my-2 h-px bg-slate-100" />
+              <div className="my-2 h-px bg-slate-100" />
+            </>
+          )}
           <div className="px-3 py-2 text-xs font-semibold text-slate-400">{t("mobileSheets.sortMode")}</div>
           {mobileSortOptions.map((option) => (
             <button
