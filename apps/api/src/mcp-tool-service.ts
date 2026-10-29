@@ -41,6 +41,7 @@ import { AppError } from "./app-error";
 import { isDemoModeEnabled } from "./demo-mode";
 import { createId, isoNow } from "./entity-utils";
 import { findUpdateMemoContentRejection } from "./envelope-content-guards";
+import { createHtmlArtifactTool, getArtifactTool, listArtifactsTool } from "./mcp-artifact-tools";
 import {
   decodeBase64Data,
   encodeBase64Data,
@@ -652,6 +653,15 @@ export const callMcpTool = async (
         changes: mutation.changes,
         diagram: diagramSemanticGraph(mutation.document),
       };
+    }
+    case "create_html_artifact": {
+      return await createHtmlArtifactTool(c, auth, args);
+    }
+    case "list_artifacts": {
+      return await listArtifactsTool(c, auth, args);
+    }
+    case "get_artifact": {
+      return await getArtifactTool(c, auth, args);
     }
     case "import_memos": {
       assertScope(auth, "write:memos");

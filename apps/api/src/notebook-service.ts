@@ -92,7 +92,7 @@ export const listNotebooks = async (db: DatabaseAdapter, workspaceId: string): P
   return rows.results.map(mapNotebook);
 };
 
-const normalizeNotebookLookupName = (value: string) => value.trim().toLocaleLowerCase("en-US");
+export const normalizeNotebookLookupName = (value: string) => value.trim().toLocaleLowerCase("en-US");
 
 export const findNotebooks = async (
   db: DatabaseAdapter,

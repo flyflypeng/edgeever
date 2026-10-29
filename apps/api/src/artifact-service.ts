@@ -162,6 +162,17 @@ const discardArtifactMemo = async (db: DatabaseAdapter, workspaceId: string, mem
   ]);
 };
 
+/** Removes an artifact that was just created, with its stored files, as if it never existed. */
+export const discardCreatedArtifact = async (context: AppContext, workspaceId: string, memoId: string) => {
+  const db = context.env.storage.db;
+  const stored = await db.prepare(`SELECT object_key, storage_config_id FROM resources WHERE memo_id = ?`)
+    .bind(memoId)
+    .all<{ object_key: string; storage_config_id: string }>();
+  await db.prepare(`DELETE FROM resources WHERE memo_id = ?`).bind(memoId).run();
+  await discardArtifactMemo(db, workspaceId, memoId);
+  if (stored.results.length) await deleteStoredObjects(context.env, stored.results).catch(() => undefined);
+};
+
 export type CreateHtmlArtifactInput = {
   workspaceId: string;
   filename: string;
