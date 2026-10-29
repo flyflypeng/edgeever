@@ -559,7 +559,7 @@ export const NotebookPane = ({
   onEmptyTrash: () => void;
   onOpenSettings: () => void;
   onCreateMemo: (kind?: NoteCreateKind) => void;
-  /** Opens the file picker that imports a local .html file as an HTML artifact. */
+  /** Opens the file picker that imports local .html files as HTML artifacts. */
   onImportHtmlArtifact: () => void;
   canCreateMemo: boolean;
   isCreatingMemo: boolean;
@@ -685,6 +685,9 @@ export const NotebookPane = ({
     [artifactFolderSortMode, artifactLibrary?.id, artifactTreeIds, notebooks],
   );
   const artifactsActive = view === "notebook" && selectedNotebookId !== null && artifactTreeIds.has(selectedNotebookId);
+  // Inside the Artifact Library the primary action imports HTML; the menu still offers every type.
+  const primaryCreateLabel = artifactsActive ? t("htmlArtifact.importPrimary") : t("notebookPane.newMemo");
+  const primaryCreateAction = artifactsActive ? onImportHtmlArtifact : () => onCreateMemo();
   const isLoading = notebooksQuery.isLoading;
   const activeNotebookSortLabel = notebookSortOptions.find((option) => option.value === notebookSortMode)?.label ?? t("options.notebookSort.nameAsc");
   const activeArtifactFolderSortLabel = notebookSortOptions.find((option) => option.value === artifactFolderSortMode)?.label ?? t("options.notebookSort.nameAsc");
@@ -784,14 +787,14 @@ export const NotebookPane = ({
           <button
             className="group flex h-12 max-w-[calc(100%-2.25rem)] shrink-0 items-center gap-2 px-2.5 text-left transition-colors duration-150 hover:bg-slate-50 focus-visible:bg-slate-50 focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50"
             type="button"
-            aria-label={t("notebookPane.newMemo")}
-            onClick={() => onCreateMemo()}
+            aria-label={primaryCreateLabel}
+            onClick={primaryCreateAction}
             disabled={!canCreateMemo || isCreatingMemo}
           >
             <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-emerald-500 text-white shadow-[0_5px_12px_rgb(var(--brand-green-rgb)/0.22)] transition-transform duration-150 group-hover:scale-[1.03] group-focus-visible:ring-2 group-focus-visible:ring-slate-900/20 group-focus-visible:ring-offset-2">
-              <Plus className="h-5 w-5" />
+              {artifactsActive ? <FileCode2 className="h-5 w-5" /> : <Plus className="h-5 w-5" />}
             </span>
-            <span className="whitespace-nowrap text-sm font-semibold text-slate-950">{t("notebookPane.newMemo")}</span>
+            <span className="whitespace-nowrap text-sm font-semibold text-slate-950">{primaryCreateLabel}</span>
           </button>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
@@ -1044,14 +1047,14 @@ export const NotebookPane = ({
                   <button
                     type="button"
                     className="flex h-8 w-8 items-center justify-center rounded-full bg-emerald-500 text-white shadow-[0_3px_8px_rgb(var(--brand-green-rgb)/0.24)] transition-transform duration-150 hover:scale-[1.03] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-900/20 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
-                    aria-label={t("notebookPane.newMemo")}
-                    onClick={() => onCreateMemo()}
+                    aria-label={primaryCreateLabel}
+                    onClick={primaryCreateAction}
                     disabled={!canCreateMemo || isCreatingMemo}
                   >
-                    <Plus className="h-4 w-4" aria-hidden="true" />
+                    {artifactsActive ? <FileCode2 className="h-4 w-4" aria-hidden="true" /> : <Plus className="h-4 w-4" aria-hidden="true" />}
                   </button>
                 </TooltipTrigger>
-                <TooltipContent side="right">{t("notebookPane.newMemo")}</TooltipContent>
+                <TooltipContent side="right">{primaryCreateLabel}</TooltipContent>
               </Tooltip>
               <DropdownMenu>
                 <Tooltip>

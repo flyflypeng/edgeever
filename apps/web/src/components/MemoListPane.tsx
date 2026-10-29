@@ -404,6 +404,7 @@ export const MemoListPane = ({
   onSyncMemos,
   onCreateMemo,
   onImportMarkdownFiles,
+  onImportHtmlArtifactFiles,
   isSyncingMemos,
   canSyncMemos,
   mobileListActionsOpen,
@@ -482,6 +483,8 @@ export const MemoListPane = ({
   onSyncMemos: () => void;
   onCreateMemo: () => void;
   onImportMarkdownFiles: (files: File[]) => void;
+  /** Imports dropped .html/.htm files as HTML artifacts. */
+  onImportHtmlArtifactFiles: (files: File[]) => void;
   isSyncingMemos: boolean;
   canSyncMemos: boolean;
   mobileListActionsOpen: boolean;
@@ -525,10 +528,11 @@ export const MemoListPane = ({
   const memoSortOptions = useMemo(() => getMemoSortOptions(t), [t]);
   const mobileFilterOptions = useMemo(() => filterOptions.filter((option: any) => option.value !== "all"), [filterOptions]);
   const visibleMemoIds = useMemo(() => memos.map((memo) => memo.id), [memos]);
+  const inArtifactLibrary = Boolean(notebook && getArtifactLibraryTreeIds(notebooks).has(notebook.id));
   // Inside the Artifact Library, memos can only move between artifact folders.
   const moveNotebookOptions = useMemo(
-    () => getNotebookMoveOptions(notebooks, notebook && getArtifactLibraryTreeIds(notebooks).has(notebook.id) ? "artifacts" : "notes"),
-    [notebook, notebooks],
+    () => getNotebookMoveOptions(notebooks, inArtifactLibrary ? "artifacts" : "notes"),
+    [inArtifactLibrary, notebooks],
   );
   const selectedMemosInList = useMemo(() => memos.filter((memo) => selectedMemoIds.has(memo.id)), [memos, selectedMemoIds]);
 
@@ -643,7 +647,16 @@ export const MemoListPane = ({
     if (!canCreateMemo || view === "trash" || !hasFileDrag(event)) return;
     event.preventDefault();
     setFileDragActive(false);
-    onImportMarkdownFiles(Array.from(event.dataTransfer.files));
+    const files = Array.from(event.dataTransfer.files);
+    const htmlFiles = files.filter((file) => /\.html?$/i.test(file.name.trim()));
+    const otherFiles = files.filter((file) => !htmlFiles.includes(file));
+    // Inside the library every dropped file is meant as an artifact, so the import explains any it refuses.
+    if (inArtifactLibrary) {
+      onImportHtmlArtifactFiles(files);
+      return;
+    }
+    if (htmlFiles.length) onImportHtmlArtifactFiles(htmlFiles);
+    if (otherFiles.length) onImportMarkdownFiles(otherFiles);
   };
 
   const requestContextDocumentAction = (action: MemoDocumentAction) => {
@@ -1055,8 +1068,8 @@ export const MemoListPane = ({
         <div className="pointer-events-none absolute inset-2 z-40 flex items-center justify-center rounded-lg border-2 border-dashed border-slate-400 bg-slate-50/95 p-6 text-center shadow-lg backdrop-blur-sm">
           <div>
             <FileUp className="mx-auto h-8 w-8 text-slate-700" />
-            <div className="mt-3 text-sm font-semibold text-slate-950">{t("memoList.dropMarkdownTitle")}</div>
-            <div className="mt-1 text-xs text-slate-600">{t("memoList.dropMarkdownDescription")}</div>
+            <div className="mt-3 text-sm font-semibold text-slate-950">{t(inArtifactLibrary ? "htmlArtifact.dropTitle" : "memoList.dropMarkdownTitle")}</div>
+            <div className="mt-1 text-xs text-slate-600">{t(inArtifactLibrary ? "htmlArtifact.dropDescription" : "memoList.dropMarkdownDescription")}</div>
           </div>
         </div>
       )}

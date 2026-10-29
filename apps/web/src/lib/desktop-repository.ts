@@ -327,7 +327,10 @@ export const createDesktopRepository = (): EdgeEverRepository => ({
     await request("sync.apply", {
       changes: [{ entityType: "memo", operation: "upsert", entityId: result.memo.id, memo: result.memo, notebook: null }],
     });
-    return { memo: await repairDisplayedMemo((await request("memo.get", { memoId: result.memo.id, includeDeleted: false })).memo) };
+    return {
+      memo: await repairDisplayedMemo((await request("memo.get", { memoId: result.memo.id, includeDeleted: false })).memo),
+      missingLocalAssets: result.missingLocalAssets,
+    };
   },
 
   listMemos: async (params) => {

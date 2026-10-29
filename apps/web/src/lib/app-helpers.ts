@@ -60,7 +60,7 @@ export type NotebookNameDialogState =
   | { mode: "create"; parentId: string | null; artifact?: boolean }
   | { mode: "rename"; notebook: Notebook; artifact?: boolean };
 
-export type AppNoticeDialogState = { title: string; description: string };
+export type AppNoticeDialogState = { title: string; description: string; details?: string[] };
 
 export const isTextEntryTarget = (target: EventTarget | null) =>
   target instanceof HTMLElement &&

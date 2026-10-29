@@ -1,5 +1,7 @@
 import {
   ARTIFACT_MAX_HTML_BYTES,
+  ARTIFACT_MAX_LOCAL_ASSET_LENGTH,
+  ARTIFACT_MAX_MISSING_LOCAL_ASSETS,
   markdownToDoc,
   serializeArtifactDocument,
   type ArtifactDocument,
@@ -62,6 +64,51 @@ export const extractHtmlText = (html: string) =>
     ARTIFACT_MAX_CONTENT_TEXT_BYTES,
   );
 
+const CSS_REFERENCES = /@import\s+["']([^"']+)["']|url\(\s*["']?([^"')]*?)["']?\s*\)/gi;
+const TAGS = /<([a-z][\w:-]*)\b([^>]*)>/gi;
+const ATTRIBUTES = /([^\s"'=<>/]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+))/g;
+// Links between pages (`<a>`, `<area>`) and `<base>` are not resources the page needs to render.
+const NAVIGATION_TAGS: Record<string, true> = { a: true, area: true, base: true };
+
+const cssReferences = (css: string) => Array.from(css.matchAll(CSS_REFERENCES), (match) => match[1] ?? match[2] ?? "");
+
+/**
+ * Local relative resources (`./img.png`, `style.css`, `/media/clip.mp4`) the
+ * page references from tags, srcset and CSS. Only the HTML is imported, so the
+ * sandbox cannot load them. At most 50, in order of first appearance.
+ */
+export const findMissingLocalAssets = (html: string) => {
+  const withoutComments = html.replace(/<!--[\s\S]*?(?:-->|$)/g, " ");
+  const references: string[] = [];
+  for (const [, css] of withoutComments.matchAll(/<style\b[^>]*>([\s\S]*?)(?:<\/style\s*>|$)/gi)) references.push(...cssReferences(css));
+  // Script and style bodies are code, not markup; keep their opening tags for `src`.
+  const markup = withoutComments.replace(/(<(script|style|template)\b[^>]*>)[\s\S]*?(?:<\/\2\s*>|$)/gi, "$1");
+  for (const [, tag, attributes] of markup.matchAll(TAGS)) {
+    for (const [, rawName, double, single, bare] of attributes.matchAll(ATTRIBUTES)) {
+      const name = rawName.toLowerCase();
+      const value = decodeHtmlEntities(double ?? single ?? bare ?? "");
+      if (name === "src" || name === "poster" || name === "data" || (name === "href" && !NAVIGATION_TAGS[tag.toLowerCase()])) {
+        references.push(value);
+      } else if (name === "srcset") {
+        references.push(...value.split(/\s*,\s+/).map((candidate) => candidate.trim().split(/\s+/)[0] ?? ""));
+      } else if (name === "style") {
+        references.push(...cssReferences(value));
+      }
+    }
+  }
+  const missing = new Set<string>();
+  for (const reference of references) {
+    const trimmed = reference.trim();
+    // A scheme (`https:`, `data:`, `blob:`, `mailto:`), a protocol-relative `//host`
+    // or a fragment points somewhere the browser can still reach from the sandbox.
+    if (!trimmed || trimmed.startsWith("#") || trimmed.startsWith("//") || /^[a-z][a-z0-9+.-]*:/i.test(trimmed)) continue;
+    if (trimmed.length > ARTIFACT_MAX_LOCAL_ASSET_LENGTH) continue;
+    missing.add(trimmed);
+    if (missing.size === ARTIFACT_MAX_MISSING_LOCAL_ASSETS) break;
+  }
+  return [...missing];
+};
+
 const invalidHtml = (message: string) => new AppError("artifact_invalid_html", message, 400);
 
 /** Checks the file name, size and encoding of an uploaded page and returns its text. */
@@ -120,7 +167,10 @@ export type CreateHtmlArtifactInput = {
   canCreateLibrary: boolean;
 };
 
-export const createHtmlArtifact = async (context: AppContext, input: CreateHtmlArtifactInput): Promise<MemoDetail> => {
+export const createHtmlArtifact = async (
+  context: AppContext,
+  input: CreateHtmlArtifactInput,
+): Promise<{ memo: MemoDetail; missingLocalAssets: string[] }> => {
   const db = context.env.storage.db;
   const html = decodeArtifactHtml(input.filename, input.bytes);
   const folderId = await resolveArtifactFolder(
@@ -131,6 +181,7 @@ export const createHtmlArtifact = async (context: AppContext, input: CreateHtmlA
     .slice(0, MAX_TITLE_LENGTH);
   const contentText = extractHtmlText(html);
   const htmlResourceId = createId("res");
+  const missingLocalAssets = findMissingLocalAssets(html);
   const document: ArtifactDocument = {
     schemaVersion: 1,
     kind: "html",
@@ -138,6 +189,7 @@ export const createHtmlArtifact = async (context: AppContext, input: CreateHtmlA
     originalFilename,
     byteSize: input.bytes.byteLength,
     sha256: await sha256Bytes(input.bytes),
+    ...(missingLocalAssets.length ? { missingLocalAssets } : {}),
     source: input.source,
   };
   const contentMarkdown = serializeArtifactDocument(document, contentText.slice(0, FALLBACK_EXCERPT_LENGTH));
@@ -165,5 +217,5 @@ export const createHtmlArtifact = async (context: AppContext, input: CreateHtmlA
     throw error;
   }
 
-  return (await getMemoDetail(db, input.workspaceId, memo.id)) ?? memo;
+  return { memo: (await getMemoDetail(db, input.workspaceId, memo.id)) ?? memo, missingLocalAssets };
 };

@@ -42,7 +42,7 @@ export const registerArtifactRoutes = (app: Hono<AppEnv>) => {
     const auth = context.get("auth");
 
     try {
-      const memo = await createHtmlArtifact(context, {
+      const created = await createHtmlArtifact(context, {
         workspaceId: getWorkspaceId(context),
         filename: file.name,
         bytes: new Uint8Array(await file.arrayBuffer()),
@@ -55,7 +55,7 @@ export const registerArtifactRoutes = (app: Hono<AppEnv>) => {
         actorLabel: getActorLabel(context),
         canCreateLibrary: Boolean(auth && hasScopes(auth, ["write:notebooks"])),
       });
-      return context.json({ memo }, 201);
+      return context.json(created, 201);
     } catch (error) {
       if (error instanceof AppError) return apiError(context, error.code, error.message, error.status);
       throw error;
