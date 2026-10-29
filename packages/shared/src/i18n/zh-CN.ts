@@ -1008,6 +1008,8 @@ export const zhCN = {
     fullscreen: "全屏沉浸（按 Esc 退出）",
     download: "下载 HTML",
     moveToTrash: "移入回收站",
+    restore: "恢复制品",
+    deleteForever: "彻底删除",
     loading: "正在加载网页…",
     loadFailed: "没能加载这个网页。请检查网络后重试。",
     updateFailed: "修改没有保存",

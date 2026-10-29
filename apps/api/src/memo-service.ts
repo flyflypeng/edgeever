@@ -27,7 +27,14 @@ import type { AppContext, AuditActor, AuthContext, Bindings } from "./api-contex
 import { AppError } from "./app-error";
 import { clampNumber, createId, isoNow, parseJsonArray } from "./entity-utils";
 import { findSaveContentRejection } from "./envelope-content-guards";
-import { assertMemoLocation, isMemoLocationAllowed, MEMO_LOCATION_INVALID, workspaceInboxId } from "./notebook-service";
+import {
+  assertMemoLocation,
+  ensureArtifactLibrary,
+  findArtifactLibraryAncestorId,
+  isMemoLocationAllowed,
+  MEMO_LOCATION_INVALID,
+  workspaceInboxId,
+} from "./notebook-service";
 import { sha256 } from "./hash-utils";
 import { getRequiredString } from "./mcp-json-rpc";
 import {
@@ -604,13 +611,13 @@ export const restoreMemosRecord = async (
   const placeholders = uniqueMemoIds.map(() => "?").join(", ");
   const rows = await db
     .prepare(
-      `SELECT m.id, m.notebook_id, m.title, m.tags_json, c.content_text
+      `SELECT m.id, m.notebook_id, m.title, m.tags_json, c.content_text, c.content_markdown
        FROM memos m
        INNER JOIN memo_contents c ON c.memo_id = m.id
        WHERE m.workspace_id = ? AND m.is_deleted = 1 AND m.id IN (${placeholders})`
     )
     .bind(workspaceId, ...uniqueMemoIds)
-    .all<{ id: string; notebook_id: string; title: string | null; tags_json: string; content_text: string }>();
+    .all<{ id: string; notebook_id: string; title: string | null; tags_json: string; content_text: string; content_markdown: string }>();
 
   if (rows.results.length !== uniqueMemoIds.length) {
     throw new AppError("missing_memos", "One or more memos cannot be restored.", 400);
@@ -623,8 +630,22 @@ export const restoreMemosRecord = async (
     .bind(workspaceId, ...notebookIds)
     .all<{ id: string }>();
   const activeNotebookIds = new Set(notebookRows.results.map((row) => row.id));
+  const libraryNotebookIds = new Set<string>();
+  for (const id of activeNotebookIds) {
+    if (await findArtifactLibraryAncestorId(db, workspaceId, id)) libraryNotebookIds.add(id);
+  }
 
-  const needsInbox = rows.results.some((row) => !activeNotebookIds.has(row.notebook_id));
+  // A memo keeps its notebook only when that notebook is active and on the
+  // memo's side of the library boundary. Otherwise artifacts go to the library
+  // root (created if needed) and ordinary notes to the inbox.
+  const fallbacks = new Map<string, "inbox" | "library">();
+  for (const row of rows.results) {
+    const isArtifact = hasArtifactDocumentMarker(row.content_markdown);
+    const keeps = activeNotebookIds.has(row.notebook_id) && libraryNotebookIds.has(row.notebook_id) === isArtifact;
+    if (!keeps) fallbacks.set(row.id, isArtifact ? "library" : "inbox");
+  }
+  const fallbackKinds = new Set(fallbacks.values());
+  const needsInbox = fallbackKinds.has("inbox");
 
   const inbox = needsInbox
     ? await db.prepare(
@@ -638,12 +659,14 @@ export const restoreMemosRecord = async (
   if (needsInbox && !inbox) {
     throw new AppError("restore_notebook_missing", "Original notebooks were deleted and the default inbox is unavailable.", 409);
   }
+  const library = fallbackKinds.has("library") ? await ensureArtifactLibrary(db, workspaceId, null, actor) : null;
 
   const now = isoNow();
   const statements: PreparedStatementAdapter[] = [];
 
   for (const row of rows.results) {
-    const restoreNotebookId = activeNotebookIds.has(row.notebook_id) ? row.notebook_id : inbox!.id;
+    const fallback = fallbacks.get(row.id);
+    const restoreNotebookId = !fallback ? row.notebook_id : fallback === "library" ? library!.id : inbox!.id;
     const tags = parseJsonArray(row.tags_json);
 
     statements.push(

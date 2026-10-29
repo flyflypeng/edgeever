@@ -997,6 +997,8 @@ export const pl = {
     fullscreen: "Pełny ekran (Esc, aby wyjść)",
     download: "Pobierz HTML",
     moveToTrash: "Przenieś do kosza",
+    restore: "Przywróć artefakt",
+    deleteForever: "Usuń trwale",
     loading: "Wczytywanie strony…",
     loadFailed: "Nie udało się wczytać strony. Sprawdź połączenie i spróbuj ponownie.",
     updateFailed: "Zmiana nie została zapisana",

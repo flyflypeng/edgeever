@@ -1008,6 +1008,8 @@ export const enUS = {
     fullscreen: "Full screen (press Esc to exit)",
     download: "Download HTML",
     moveToTrash: "Move to trash",
+    restore: "Restore artifact",
+    deleteForever: "Delete forever",
     loading: "Loading the page…",
     loadFailed: "The page could not be loaded. Check your connection and try again.",
     updateFailed: "The change was not saved",

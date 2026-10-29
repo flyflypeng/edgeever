@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { globSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { globSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { callMcpTool, fetchEdgeEverApp } from "./index.ts";
@@ -64,7 +64,10 @@ const installation = () => {
   );
   const resourcesOf = async (memoId) =>
     (await request("GET", "/api/v1/resources")).body.resources.filter((resource) => resource.memoId === memoId);
-  return { sqlite, request, send, importArtifact, ensureLibrary, inboxId, saveBody, callTool, resourcesOf };
+  const storedFiles = () => readdirSync(resourcesDirectory, { recursive: true, withFileTypes: true })
+    .filter((entry) => entry.isFile())
+    .map((entry) => join(entry.parentPath ?? entry.path, entry.name));
+  return { sqlite, request, send, importArtifact, ensureLibrary, inboxId, saveBody, callTool, resourcesOf, storedFiles };
 };
 
 const htmlFile = (html, name = "report.html", type = "text/html") => new File([html], name, { type });
@@ -267,5 +270,83 @@ describe("artifact list visibility", () => {
 
     expect((await env.request("DELETE", `/api/v1/memos/${artifact.id}`)).status).toBe(200);
     expect(await ids("/api/v1/memos?trash=1")).toEqual([artifact.id]);
+  });
+});
+
+describe("artifacts in the trash", () => {
+  test("trashed artifacts are listed in the trash and restore into their folder", async () => {
+    const env = installation();
+    const library = await env.ensureLibrary();
+    const folder = (await env.request("POST", "/api/v1/notebooks", { name: "Folder", parentId: library.id })).body.notebook;
+    const memo = (await env.importArtifact(htmlFile("<title>Kept</title>"), { folderId: folder.id })).body.memo;
+
+    expect((await env.request("DELETE", `/api/v1/memos/${memo.id}`)).status).toBe(200);
+    const trash = (await env.request("GET", "/api/v1/memos?trash=1")).body.memos;
+    expect(trash.map((item) => [item.id, item.artifact?.kind])).toEqual([[memo.id, "html"]]);
+
+    const restored = await env.request("POST", `/api/v1/memos/${memo.id}/restore`);
+    expect(restored.status).toBe(200);
+    expect(restored.body.memo).toMatchObject({ notebookId: folder.id, isDeleted: false });
+  });
+
+  test("an artifact whose folder is gone restores to the library root; a note still restores to the inbox", async () => {
+    const env = installation();
+    const library = await env.ensureLibrary();
+    const inboxId = await env.inboxId();
+    const folder = (await env.request("POST", "/api/v1/notebooks", { name: "Folder", parentId: library.id })).body.notebook;
+    const notebook = (await env.request("POST", "/api/v1/notebooks", { name: "Notes" })).body.notebook;
+    const artifact = (await env.importArtifact(htmlFile("<title>Orphan</title>"), { folderId: folder.id })).body.memo;
+    const note = (await env.request("POST", "/api/v1/memos", { notebookId: notebook.id, title: "Note", contentMarkdown: "hi" })).body.memo;
+    for (const id of [artifact.id, note.id]) await env.request("DELETE", `/api/v1/memos/${id}`);
+    for (const id of [folder.id, notebook.id]) expect((await env.request("DELETE", `/api/v1/notebooks/${id}`)).status).toBe(200);
+
+    expect((await env.request("POST", `/api/v1/memos/${artifact.id}/restore`)).body.memo.notebookId).toBe(library.id);
+    expect((await env.request("POST", `/api/v1/memos/${note.id}/restore`)).body.memo.notebookId).toBe(inboxId);
+  });
+
+  test("batch restore recreates a missing library for artifacts", async () => {
+    const env = installation();
+    const artifact = (await env.importArtifact(htmlFile("<title>Lonely</title>"))).body.memo;
+    await env.request("DELETE", `/api/v1/memos/${artifact.id}`);
+    // The library itself can never be deleted through the API; simulate lost data.
+    env.sqlite.query("UPDATE notebooks SET is_deleted = 1 WHERE system_kind = 'artifact_library'").run();
+
+    await expect(env.callTool("restore_memos", { memoIds: [artifact.id] })).resolves.toMatchObject({ restored: 1 });
+    const library = await env.ensureLibrary();
+    expect(library.id).not.toBe(artifact.notebookId);
+    expect((await env.request("GET", `/api/v1/memos/${artifact.id}`)).body.memo.notebookId).toBe(library.id);
+  });
+
+  test("purging an artifact removes every HTML version and thumbnail object; so does emptying the trash", async () => {
+    for (const purge of ["single", "empty"]) {
+      const env = installation();
+      const memo = (await env.importArtifact(htmlFile("<p>v1</p>"))).body.memo;
+      for (const file of [htmlFile("<p>v2</p>", "v2.html"), new File([new Uint8Array([1, 2, 3])], "thumb.webp", { type: "image/webp" })]) {
+        const form = new FormData();
+        form.append("file", file);
+        expect((await env.send("POST", `/api/v1/memos/${memo.id}/resources`, { body: form })).status).toBe(201);
+      }
+      expect(await env.resourcesOf(memo.id)).toHaveLength(3);
+      expect(env.storedFiles().length).toBe(3);
+
+      await env.request("DELETE", `/api/v1/memos/${memo.id}`);
+      const response = purge === "single"
+        ? await env.request("DELETE", `/api/v1/memos/${memo.id}?permanent=1`)
+        : await env.request("DELETE", "/api/v1/memos/trash/empty");
+      expect(response.status).toBe(200);
+      expect(env.sqlite.query("SELECT COUNT(*) AS count FROM resources WHERE memo_id = ?").get(memo.id).count).toBe(0);
+      expect(env.storedFiles()).toEqual([]);
+    }
+  });
+
+  test("a folder with an artifact anywhere in its subtree cannot be deleted", async () => {
+    const env = installation();
+    const library = await env.ensureLibrary();
+    const folder = (await env.request("POST", "/api/v1/notebooks", { name: "Folder", parentId: library.id })).body.notebook;
+    const child = (await env.request("POST", "/api/v1/notebooks", { name: "Child", parentId: folder.id })).body.notebook;
+    await env.importArtifact(htmlFile("<p>x</p>"), { folderId: child.id });
+
+    expect(await env.request("DELETE", `/api/v1/notebooks/${folder.id}`))
+      .toMatchObject({ status: 409, body: { error: { code: "notebook_not_empty" } } });
   });
 });
