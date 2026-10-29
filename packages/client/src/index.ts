@@ -1728,13 +1728,16 @@ export const createEdgeEverClient = (options: EdgeEverClientOptions = {}) => {
         body: JSON.stringify({}),
       }),
 
-    /** Imports one .html/.htm file as an HTML artifact; the folder defaults to the Artifact Library. */
+    /**
+     * Imports one .html/.htm file as an HTML artifact; the folder defaults to the Artifact Library.
+     * `missingLocalAssets` lists the local relative resources the page references but the import could not bring along.
+     */
     createHtmlArtifact: (file: File, payload: { folderId?: string | null; locale?: string } = {}) => {
       const form = new FormData();
       form.append("file", file, file.name);
       if (payload.folderId) form.append("folderId", payload.folderId);
       if (payload.locale) form.append("locale", payload.locale);
-      return request<MemoResponse>("/api/v1/artifacts", { method: "POST", body: form });
+      return request<MemoResponse & { missingLocalAssets: string[] }>("/api/v1/artifacts", { method: "POST", body: form });
     },
 
     duplicateMemo: (memoId: string, payload: { notebookId?: string; title?: string } = {}) =>

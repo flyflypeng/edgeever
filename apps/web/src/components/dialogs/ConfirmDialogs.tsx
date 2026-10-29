@@ -18,6 +18,7 @@ export const AppConfirmDialog = ({
   cancelLabel,
   confirmLabel,
   description,
+  details,
   error,
   hideCancel = false,
   isWorking = false,
@@ -29,6 +30,8 @@ export const AppConfirmDialog = ({
   cancelLabel?: string;
   confirmLabel: string;
   description: string;
+  /** One line per item, listed below the description. */
+  details?: string[];
   error?: string | null;
   hideCancel?: boolean;
   isWorking?: boolean;
@@ -62,6 +65,11 @@ export const AppConfirmDialog = ({
             <DialogDescription className="mt-1 text-sm leading-5 text-slate-500">
               {description}
             </DialogDescription>
+            {details?.length ? (
+              <ul className="mt-3 max-h-64 space-y-2 overflow-y-auto break-words text-xs leading-5 text-slate-600" data-notice-details>
+                {details.map((detail, index) => <li key={index}>{detail}</li>)}
+              </ul>
+            ) : null}
             {error ? <p className="mt-2 text-xs leading-5 text-rose-600" role="alert">{error}</p> : null}
           </div>
         </DialogHeader>

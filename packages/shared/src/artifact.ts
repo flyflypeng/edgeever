@@ -6,6 +6,10 @@ const ENVELOPE = /<!--\s*edgeever-artifact-v1:([A-Za-z0-9_-]+)\s*-->/;
 
 /** Largest HTML an artifact may hold, in UTF-8 bytes. */
 export const ARTIFACT_MAX_HTML_BYTES = 20 * 1024 * 1024;
+/** How many missing local resources an import reports at most. */
+export const ARTIFACT_MAX_MISSING_LOCAL_ASSETS = 50;
+/** Longest resource reference kept in the list; the envelope must stay small. */
+export const ARTIFACT_MAX_LOCAL_ASSET_LENGTH = 500;
 
 export const ArtifactDocumentSchema = z.object({
   schemaVersion: z.literal(1),
@@ -16,6 +20,8 @@ export const ArtifactDocumentSchema = z.object({
   sha256: z.string().regex(/^[0-9a-f]{64}$/),
   thumbnailResourceId: z.string().min(1).max(160).optional(),
   thumbnailSha256: z.string().regex(/^[0-9a-f]{64}$/).optional(),
+  /** Local relative paths the page references (`./img.png`), which an import cannot bring along. */
+  missingLocalAssets: z.array(z.string().min(1).max(ARTIFACT_MAX_LOCAL_ASSET_LENGTH)).max(ARTIFACT_MAX_MISSING_LOCAL_ASSETS).optional(),
   source: z.object({ type: z.enum(["upload", "mcp"]), agent: z.string().max(80).optional() }),
 });
 export type ArtifactDocument = z.infer<typeof ArtifactDocumentSchema>;

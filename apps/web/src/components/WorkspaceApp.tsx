@@ -48,7 +48,7 @@ import {
 } from "@/lib/mobile-editor";
 import { cn } from "@/lib/utils";
 import { isBrowserOffline, isBrowserOnline } from "@/lib/network-status";
-import { createDefaultDiagramDocument, createDefaultInfographicDocument, hasArtifactDocumentMarker, hasPosterDocumentMarker, posterFallbackMarkdown, serializePosterDocument, createDefaultTableDocument, diagramFallbackMarkdown, getArtifactLibraryTreeIds, getNotebookScopeIds, hasTableDocumentMarker, infographicFallbackMarkdown, markdownToDoc, parseDiagramDocument, parseInfographicDocument, parseTableDocument, serializeDiagramDocument, serializeInfographicDocument, serializeTableDocument, tableFallbackMarkdown, type NoteCreateKind, type Notebook, type AuthUser, type MemoSummary, type MemoDetail, type MemoTemplate as SavedMemoTemplate, getMemoDisplayTitle } from "@edgeever/shared";
+import { ARTIFACT_MAX_HTML_BYTES, createDefaultDiagramDocument, createDefaultInfographicDocument, hasArtifactDocumentMarker, hasPosterDocumentMarker, posterFallbackMarkdown, serializePosterDocument, createDefaultTableDocument, diagramFallbackMarkdown, getArtifactLibraryTreeIds, getNotebookScopeIds, hasTableDocumentMarker, infographicFallbackMarkdown, markdownToDoc, parseDiagramDocument, parseInfographicDocument, parseTableDocument, serializeDiagramDocument, serializeInfographicDocument, serializeTableDocument, tableFallbackMarkdown, type NoteCreateKind, type Notebook, type AuthUser, type MemoSummary, type MemoDetail, type MemoTemplate as SavedMemoTemplate, getMemoDisplayTitle } from "@edgeever/shared";
 import { toggleMobileMemoSelection } from "@edgeever/shared/mobile-ui";
 import type {
   Pane,
@@ -2177,35 +2177,73 @@ export const WorkspaceApp = ({
       .then(createDiagramMemo);
   };
 
-  const importHtmlArtifactMutation = useMutation({
-    mutationFn: async (file: File) => {
+  // Each file imports on its own: one that fails is reported and the rest still land.
+  const importHtmlArtifactsMutation = useMutation({
+    mutationFn: async (files: File[]) => {
       // Imports land in the open artifact folder, otherwise in the library root.
       const folderId = selectedNotebookId && artifactTreeIds.has(selectedNotebookId) ? selectedNotebookId : null;
-      return repository.createHtmlArtifact(file, { folderId, locale: i18n.resolvedLanguage });
+      const results: Array<{ file: File; memo?: MemoDetail; missingLocalAssets: string[]; errorCode?: string | null }> = [];
+      for (const file of files) {
+        if (!/\.html?$/i.test(file.name.trim())) {
+          results.push({ file, missingLocalAssets: [], errorCode: "artifact_invalid_html" });
+          continue;
+        }
+        // The server refuses it too; skipping here saves the upload.
+        if (file.size > ARTIFACT_MAX_HTML_BYTES) {
+          results.push({ file, missingLocalAssets: [], errorCode: "artifact_too_large" });
+          continue;
+        }
+        try {
+          results.push({ file, ...(await repository.createHtmlArtifact(file, { folderId, locale: i18n.resolvedLanguage })) });
+        } catch (error) {
+          const errorCode = error instanceof ApiRequestError ? error.code : error instanceof Error ? error.message : null;
+          results.push({ file, missingLocalAssets: [], errorCode });
+        }
+      }
+      return results;
     },
-    onSuccess: async ({ memo }) => {
-      setTemplatesOpen(false);
-      setMobileBottomNavActive("home");
-      await queryClient.invalidateQueries({ queryKey: ["notebooks"] });
-      revealCreatedMemo(memo);
-    },
-    onError: (error) => {
-      const code = error instanceof ApiRequestError ? error.code : error instanceof Error ? error.message : null;
+    onSuccess: async (results) => {
+      const importFailureReason = (code: string | null | undefined) => t(
+        code === "artifact_invalid_html" ? "htmlArtifact.importInvalid"
+          : code === "artifact_too_large" ? "htmlArtifact.importTooLarge"
+            : code === "artifact_import_offline" ? "htmlArtifact.importOffline"
+              : "htmlArtifact.importFailed",
+      );
+      const imported = results.flatMap((result) => (result.memo ? [result.memo] : []));
+      const failed = results.filter((result) => !result.memo);
+      if (imported.length) {
+        setTemplatesOpen(false);
+        setMobileBottomNavActive("home");
+        await queryClient.invalidateQueries({ queryKey: ["notebooks"] });
+        for (const memo of imported.slice(0, -1)) updateMemoSummaryInLists(queryClient, memoToSummary(memo));
+        revealCreatedMemo(imported[imported.length - 1]);
+      }
+      if (results.length === 1 && failed.length === 1) {
+        setAppNoticeDialog({ title: t("htmlArtifact.importFailedTitle"), description: importFailureReason(failed[0].errorCode) });
+        return;
+      }
+      const details = results.flatMap(({ file, memo, missingLocalAssets, errorCode }) => {
+        if (!memo) return [t("htmlArtifact.importFileFailed", { name: file.name, reason: importFailureReason(errorCode) })];
+        if (!missingLocalAssets.length) return [];
+        return [t("htmlArtifact.importMissingAssets", { name: file.name, assets: missingLocalAssets.join(", ") })];
+      });
+      if (!details.length) return;
       setAppNoticeDialog({
-        title: t("htmlArtifact.importFailedTitle"),
-        description: t(
-          code === "artifact_invalid_html" ? "htmlArtifact.importInvalid"
-            : code === "artifact_too_large" ? "htmlArtifact.importTooLarge"
-              : code === "artifact_import_offline" ? "htmlArtifact.importOffline"
-                : "htmlArtifact.importFailed",
-        ),
+        title: t(failed.length ? "htmlArtifact.importResultTitle" : "htmlArtifact.importWarningsTitle"),
+        description: t("htmlArtifact.importResultSummary", { imported: imported.length, failed: failed.length }),
+        details,
       });
     },
   });
 
   const handleImportHtmlArtifact = () => {
-    if (memoView === "trash" || importHtmlArtifactMutation.isPending) return;
+    if (memoView === "trash" || importHtmlArtifactsMutation.isPending) return;
     htmlArtifactInputRef.current?.click();
+  };
+
+  const handleImportHtmlArtifactFiles = (files: File[]) => {
+    if (memoView === "trash" || importHtmlArtifactsMutation.isPending || !files.length) return;
+    importHtmlArtifactsMutation.mutate(files);
   };
 
   const handleImportMarkdownFiles = async (files: File[]) => {
@@ -3634,6 +3672,7 @@ export const WorkspaceApp = ({
               onCancelMobileSearch={handleCancelMobileSearch}
               onCreateMemo={handleCreateMemo}
               onImportMarkdownFiles={(files) => void handleImportMarkdownFiles(files)}
+              onImportHtmlArtifactFiles={handleImportHtmlArtifactFiles}
               onClearSelection={clearMemoSelection}
               onEnterSelectionMode={enterMemoSelectionMode}
               onReplaceSelection={replaceMemoSelection}
@@ -4180,11 +4219,12 @@ export const WorkspaceApp = ({
         className="hidden"
         type="file"
         accept=".html,.htm,text/html"
+        multiple
         data-html-artifact-input
         onChange={(event) => {
-          const [file] = Array.from(event.currentTarget.files ?? []);
+          const files = Array.from(event.currentTarget.files ?? []);
           event.currentTarget.value = "";
-          if (file) importHtmlArtifactMutation.mutate(file);
+          handleImportHtmlArtifactFiles(files);
         }}
       />
       {notebookDeleteConfirmation && (
@@ -4207,6 +4247,7 @@ export const WorkspaceApp = ({
         <AppConfirmDialog
           title={appNoticeDialog.title}
           description={appNoticeDialog.description}
+          details={appNoticeDialog.details}
           confirmLabel={t("workspaceDialogs.ok")}
           closeOnBrowserBack={false}
           hideCancel

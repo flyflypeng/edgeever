@@ -141,6 +141,68 @@ describe("import an HTML artifact", () => {
     expect(tooLarge).toMatchObject({ status: 413, body: { error: { code: "artifact_too_large" } } });
   });
 
+  test("lists local relative resources the page references, ignoring absolute URLs, data URIs and anchors", async () => {
+    const env = installation();
+    const html = `<!doctype html><html><head>
+      <link rel="stylesheet" href="./style.css">
+      <link rel="icon" href="https://cdn.example.com/favicon.ico">
+      <link rel="preconnect" href="//fonts.example.com">
+      <style>@import "theme/base.css"; body { background: url('img/bg.png'); } .x { background: url(data:image/png;base64,AAAA) }</style>
+      <script src="js/app.js"></script>
+      <script>const notAnAsset = "<img src='from-script.png'>";</script>
+    </head><body>
+      <!-- <img src="commented-out.png"> -->
+      <img src="./img.png" srcset="img@2x.png 2x, https://cdn.example.com/img@3x.png 3x">
+      <img src="data:image/gif;base64,R0lGODlhAQABAAAAACw=">
+      <img src="./img.png">
+      <div style="background-image: url(&quot;../shared/hero.jpg&quot;)"></div>
+      <video poster="media/poster.jpg"><source src="/media/clip.mp4"></video>
+      <a href="#section">anchor</a> <a href="other-page.html">link</a>
+      <img src="blob:https://example.com/123">
+    </body></html>`;
+
+    const created = await env.importArtifact(htmlFile(html, "page.html"));
+
+    expect(created.status).toBe(201);
+    const expected = ["./style.css", "theme/base.css", "img/bg.png", "js/app.js", "./img.png", "img@2x.png", "../shared/hero.jpg", "media/poster.jpg", "/media/clip.mp4"];
+    expect([...created.body.missingLocalAssets].sort()).toEqual([...expected].sort());
+    // The list lives in the envelope, so it survives a reload.
+    const detail = (await env.request("GET", `/api/v1/memos/${created.body.memo.id}`)).body.memo;
+    const encoded = detail.contentMarkdown.match(/edgeever-artifact-v1:([A-Za-z0-9_-]+)/)[1];
+    expect(JSON.parse(Buffer.from(encoded, "base64url").toString("utf8")).missingLocalAssets.sort()).toEqual([...expected].sort());
+
+    const clean = await env.importArtifact(htmlFile(`<img src="https://example.com/a.png"><a href="#top">top</a>`, "clean.html"));
+    expect(clean.body.missingLocalAssets).toEqual([]);
+  });
+
+  test("keeps at most 50 missing local resources", async () => {
+    const env = installation();
+    const html = Array.from({ length: 80 }, (_, index) => `<img src="images/${index}.png">`).join("");
+
+    const created = await env.importArtifact(htmlFile(html, "gallery.html"));
+
+    expect(created.status).toBe(201);
+    expect(created.body.missingLocalAssets).toHaveLength(50);
+    expect(created.body.missingLocalAssets[0]).toBe("images/0.png");
+  });
+
+  test("importing the same file twice creates two independent artifacts", async () => {
+    const env = installation();
+    const file = htmlFile("<title>Same page</title><p>Body</p>", "same.html");
+
+    const first = (await env.importArtifact(file)).body.memo;
+    const second = (await env.importArtifact(file)).body.memo;
+
+    expect(second.id).not.toBe(first.id);
+    expect([first.title, second.title]).toEqual(["Same page", "Same page"]);
+    const [firstHtml] = await env.resourcesOf(first.id);
+    const [secondHtml] = await env.resourcesOf(second.id);
+    expect(secondHtml.id).not.toBe(firstHtml.id);
+    const library = await env.ensureLibrary();
+    const listed = (await env.request("GET", `/api/v1/memos?notebookId=${library.id}`)).body.memos.map((memo) => memo.id);
+    expect(listed.sort()).toEqual([first.id, second.id].sort());
+  });
+
   test("search finds visible page text, never script or style text, and indexes at most 200 KB", async () => {
     const env = installation();
     const library = await env.ensureLibrary();

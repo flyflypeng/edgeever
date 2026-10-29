@@ -87,8 +87,11 @@ export type EdgeEverRepository = {
    * local edits of the note are synchronized first so the copy includes them.
    */
   duplicateMemo(memoId: string, input?: { notebookId?: string; title?: string }): Promise<{ memo: MemoDetail }>;
-  /** Imports an HTML file as an artifact on the server. Requires a connection. */
-  createHtmlArtifact(file: File, input: { folderId?: string | null; locale?: string }): Promise<{ memo: MemoDetail }>;
+  /**
+   * Imports an HTML file as an artifact on the server. Requires a connection.
+   * `missingLocalAssets` lists local relative resources the page references that were not imported.
+   */
+  createHtmlArtifact(file: File, input: { folderId?: string | null; locale?: string }): Promise<{ memo: MemoDetail; missingLocalAssets: string[] }>;
   /**
    * Saves an artifact's title or tags without its body; the ordinary memo save
    * always sends the body, which the server refuses for artifacts. Requires a connection.
