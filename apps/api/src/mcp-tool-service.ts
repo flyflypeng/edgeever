@@ -1,7 +1,7 @@
 import { requestPosterRender, readPosterRenderJob, posterRenderJob } from "./poster-render-service";
 import { applyPosterEdits, compilePosterMemo, posterCapabilities } from "./mcp-poster-tools";
 import { resolveObjectStorage } from "./object-storage";
-import { hasPosterDocumentMarker, parsePosterDocument, serializePosterDocument } from "@edgeever/shared";
+import { parsePosterDocument, serializePosterDocument } from "@edgeever/shared";
 import {
   AiPromptTemplateCreateSchema,
   AiPromptTemplateUpdateSchema,
@@ -10,7 +10,6 @@ import {
   compileInfographicNote,
   DIAGRAM_DEFAULT_THEME,
   docToText,
-  hasInfographicDocumentMarker,
   INFOGRAPHIC_SCHEMA_VERSION,
   infographicFallbackMarkdown,
   infographicSyntaxTemplate,
@@ -21,7 +20,6 @@ import {
   TABLE_FIELD_LIMIT,
   TABLE_RECORD_LIMIT,
   TABLE_SCHEMA_VERSION,
-  hasTableDocumentMarker,
   parseDiagramDocument,
   parseInfographicDocument,
   parseTableDocument,
@@ -42,6 +40,7 @@ import type { AppContext, AuditActor, AuthContext, Bindings } from "./api-contex
 import { AppError } from "./app-error";
 import { isDemoModeEnabled } from "./demo-mode";
 import { createId, isoNow } from "./entity-utils";
+import { findUpdateMemoContentRejection } from "./envelope-content-guards";
 import {
   decodeBase64Data,
   encodeBase64Data,
@@ -670,30 +669,8 @@ export const callMcpTool = async (
       const memoId = getRequiredString(args.memoId, "memoId");
       if (args.contentMarkdown !== undefined) {
         const existing = await getMemoDetail(c.env.storage.db, auth.workspaceId, memoId);
-        if (existing && parseDiagramDocument(existing.contentMarkdown)) {
-          throw new AppError(
-            "diagram_update_required",
-            "Diagram content cannot be replaced through update_memo. Use update_diagram for semantic changes.",
-            400,
-          );
-        }
-        if (existing && hasTableDocumentMarker(existing.contentMarkdown)) {
-          throw new AppError(
-            "table_update_required",
-            "Structured table content cannot be replaced through update_memo.",
-            400,
-          );
-        }
-        if (existing && hasPosterDocumentMarker(existing.contentMarkdown)) {
-          throw new AppError("poster_update_required", "Poster content cannot be replaced through update_memo. Use get_poster then update_poster.", 400);
-        }
-        if (existing && hasInfographicDocumentMarker(existing.contentMarkdown)) {
-          throw new AppError(
-            "infographic_update_required",
-            "Infographic content cannot be replaced through update_memo.",
-            400,
-          );
-        }
+        const rejection = existing && findUpdateMemoContentRejection(existing.contentMarkdown);
+        if (rejection) throw new AppError(rejection.code, rejection.message, 400);
       }
       const actor = getAuditActor(c);
       const actorLabel = getActorLabel(c);
