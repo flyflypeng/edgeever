@@ -198,6 +198,26 @@ final class MobileUIParityTests: XCTestCase {
         )
     }
 
+    func testArtifactLibraryTreeScopesCreateAndMoveTargets() {
+        var library = makeNotebook(id: "library", parent: nil, name: "Agent 制品", order: 0)
+        library.systemKind = "artifact_library"
+        var inbox = makeNotebook(id: "ws_inbox", parent: nil, name: "Inbox", order: 2)
+        inbox.slug = "inbox"
+        let notebooks = [
+            library,
+            makeNotebook(id: "folder", parent: "library", name: "Folder", order: 0),
+            makeNotebook(id: "work", parent: nil, name: "Work", order: 1),
+            inbox,
+        ]
+        XCTAssertEqual(NotebookHierarchy.artifactLibraryTreeIds(notebooks: notebooks), ["library", "folder"])
+        XCTAssertEqual(NotebookHierarchy.locationTargets(notebooks: notebooks, forArtifact: true).map(\.id), ["library", "folder"])
+        XCTAssertEqual(NotebookHierarchy.locationTargets(notebooks: notebooks, forArtifact: false).map(\.id), ["work", "ws_inbox"])
+        XCTAssertEqual(NotebookHierarchy.createNotebookId(notebooks: notebooks, selectedNotebookId: "work"), "work")
+        XCTAssertEqual(NotebookHierarchy.createNotebookId(notebooks: notebooks, selectedNotebookId: "folder"), "ws_inbox")
+        XCTAssertEqual(NotebookHierarchy.createNotebookId(notebooks: notebooks, selectedNotebookId: nil), "ws_inbox")
+        XCTAssertTrue(NotebookHierarchy.artifactLibraryTreeIds(notebooks: Array(notebooks.dropFirst())).isEmpty)
+    }
+
     func testNotebookDescendantMemoCountExcludesTheNotebookItself() {
         let notebooks = [
             makeNotebook(id: "root", parent: nil, name: "Root", order: 0, memoCount: 2),

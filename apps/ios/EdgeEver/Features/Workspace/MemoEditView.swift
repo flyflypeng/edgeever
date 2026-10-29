@@ -758,8 +758,10 @@ struct MemoEditView: View {
         isCreate && !isCreating && !isUploading
     }
 
+    /// Notes never live in the Artifact Library tree, so its folders are not offered here.
     private var availableNotebooks: [Notebook] {
-        (try? env.mirror.listNotebooks(scope: env.session.dataScope ?? "")) ?? []
+        let notebooks = (try? env.mirror.listNotebooks(scope: env.session.dataScope ?? "")) ?? []
+        return NotebookHierarchy.locationTargets(notebooks: notebooks, forArtifact: false)
     }
 
     private var selectedNotebookName: String {

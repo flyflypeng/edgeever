@@ -78,6 +78,11 @@ struct Notebook: Codable, Equatable, Sendable, Identifiable {
     var lastMemoUpdatedAt: String?
     var createdAt: String
     var updatedAt: String
+    /// `"artifact_library"` marks the Artifact Library; older servers omit it.
+    /// Kept as a plain string so a future kind never breaks decoding.
+    var systemKind: String? = nil
+
+    var isArtifactLibrary: Bool { systemKind == "artifact_library" }
 }
 
 struct MemoSummary: Codable, Equatable, Sendable, Identifiable {

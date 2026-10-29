@@ -45,6 +45,27 @@ final class TipTapContentSourceTests: XCTestCase {
         XCTAssertFalse(decision.payload.contains("edgeever-poster-v1"))
     }
 
+    func testArtifactViewerShowsFallbackBodyAndStripsEnvelope() {
+        // Shape written by `serializeArtifactDocument` in packages/shared artifact.ts.
+        let markdown = """
+        ![HTML artifact](/api/v1/resources/res_thumb/blob)
+
+        This is an HTML artifact. Open it in EdgeEver on the web or desktop to view it.
+
+        > Quarterly report
+
+        <!-- edgeever-artifact-v1:eyJzY2hlbWFWZXJzaW9uIjoxfQ -->
+        """
+        let json = #"{"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"Quarterly report"}]}]}"#
+        XCTAssertTrue(TipTapContentSource.isArtifact(markdown: markdown))
+        let decision = TipTapContentSource.resolve(mode: .viewer, documentJSON: json, markdown: markdown)
+        XCTAssertFalse(decision.useJSON)
+        XCTAssertTrue(decision.payload.contains("res_thumb/blob"))
+        XCTAssertTrue(decision.payload.contains("Quarterly report"))
+        XCTAssertFalse(decision.payload.contains("edgeever-artifact-v1"))
+        XCTAssertFalse(TipTapContentSource.isArtifact(markdown: "plain note"))
+    }
+
     func testEditorMarkdownRemainsAuthoritativeForRichStructures() {
         let markdown = """
         1. first

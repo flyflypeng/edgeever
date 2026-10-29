@@ -30,6 +30,23 @@ final class WorkspaceStore {
         return notebooks.first { $0.id == selectedNotebookId }
     }
 
+    /// Notebook a new note goes to; never a folder of the Artifact Library.
+    var createNotebookId: String {
+        NotebookHierarchy.createNotebookId(notebooks: notebooks, selectedNotebookId: selectedNotebookId)
+    }
+
+    /// Whether a listed memo lives in the Artifact Library tree (artifacts only live there).
+    func isInArtifactLibrary(_ memo: MemoSummary) -> Bool {
+        NotebookHierarchy.artifactLibraryTreeIds(notebooks: notebooks).contains(memo.notebookId)
+    }
+
+    /// Move targets for the current selection: library folders for artifacts, notebooks for notes.
+    var moveTargets: [Notebook] {
+        let selected = memos.filter { selectedMemoIds.contains($0.id) }
+        let allArtifacts = !selected.isEmpty && selected.allSatisfy { isInArtifactLibrary($0) }
+        return NotebookHierarchy.locationTargets(notebooks: notebooks, forArtifact: allArtifacts)
+    }
+
     func reload(env: AppEnvironment, resetOffset: Bool = true) {
         guard let scope = env.session.dataScope else {
             notebooks = []
@@ -222,8 +239,32 @@ final class WorkspaceStore {
 
     func moveSelection(env: AppEnvironment, notebookId: String) async {
         guard let scope = env.session.dataScope else { return }
+        let targetIsLibrary = NotebookHierarchy.artifactLibraryTreeIds(notebooks: notebooks).contains(notebookId)
         for memoId in selectedMemoIds {
             guard var memo = try? env.mirror.resolveMemo(scope: scope, id: memoId) else { continue }
+            let isArtifact = TipTapContentSource.isArtifact(markdown: memo.contentMarkdown)
+            // Artifacts stay in the library and notes stay out of it (`artifact_location_invalid`).
+            guard isArtifact == targetIsLibrary else { continue }
+            if isArtifact {
+                // The outbox always sends a body, which artifacts refuse; move on the server directly.
+                do {
+                    let updated = try await env.session.client.updateMemo(
+                        id: memo.id,
+                        expectedRevision: memo.revision,
+                        expectedContentHash: nil,
+                        editSessionId: nil,
+                        notebookId: notebookId,
+                        title: nil,
+                        isPinned: nil,
+                        contentMarkdown: nil,
+                        tags: nil
+                    )
+                    try env.mirror.upsertMemo(scope: scope, memo: updated)
+                } catch {
+                    listError = error.localizedDescription
+                }
+                continue
+            }
             memo.notebookId = notebookId
             memo.updatedAt = EdgeEverDate.nowString()
             try? env.mirror.upsertMemo(scope: scope, memo: memo)

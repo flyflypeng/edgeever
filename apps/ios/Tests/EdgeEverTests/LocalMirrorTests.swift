@@ -79,6 +79,41 @@ final class LocalMirrorTests: XCTestCase {
         XCTAssertEqual(result.memos.map(\.id), ["exact"])
     }
 
+    func testAllNotesLeavesOutTheArtifactLibraryTree() throws {
+        let db = try AppDatabase.makeEmpty()
+        let mirror = LocalMirrorRepository(dbQueue: db)
+        let scope = "https://demo.example|artifacts"
+        let now = EdgeEverDate.nowString()
+        func notebook(_ id: String, parent: String?, systemKind: String? = nil) -> Notebook {
+            Notebook(
+                id: id, parentId: parent, name: id, slug: nil, icon: nil, color: nil, sortOrder: 0,
+                memoCount: 0, lastMemoUpdatedAt: nil, createdAt: now, updatedAt: now, systemKind: systemKind
+            )
+        }
+        func memo(_ id: String, in notebookId: String) -> MemoDetail {
+            MemoDetail.localPlaceholder(
+                id: id, notebookId: notebookId, title: id, contentMarkdown: "shared words",
+                tags: ["t"], createdAt: now
+            )
+        }
+        try mirror.applyBootstrapBatch(
+            scope: scope,
+            notebooks: [
+                notebook("inbox", parent: nil),
+                notebook("library", parent: nil, systemKind: "artifact_library"),
+                notebook("folder", parent: "library"),
+            ],
+            memos: [memo("note", in: "inbox"), memo("page", in: "folder")]
+        )
+
+        XCTAssertEqual(try mirror.listNotebooks(scope: scope).first { $0.id == "library" }?.systemKind, "artifact_library")
+        XCTAssertEqual(try mirror.listMemos(scope: scope, params: .init()).memos.map(\.id), ["note"])
+        XCTAssertEqual(try mirror.listMemos(scope: scope, params: .init()).totalCount, 1)
+        XCTAssertEqual(try mirror.listMemos(scope: scope, params: .init(notebookIds: ["folder"])).memos.map(\.id), ["page"])
+        XCTAssertEqual(Set(try mirror.listMemos(scope: scope, params: .init(q: "shared")).memos.map(\.id)), ["note", "page"])
+        XCTAssertEqual(Set(try mirror.listMemos(scope: scope, params: .init(tag: "t")).memos.map(\.id)), ["note", "page"])
+    }
+
     func testOutboxCreateAbsorbsUpdate() throws {
         let db = try AppDatabase.makeEmpty()
         let outbox = SyncOutboxRepository(dbQueue: db)

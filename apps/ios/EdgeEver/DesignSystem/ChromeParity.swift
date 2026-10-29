@@ -103,6 +103,7 @@ enum DetailMemoChrome {
     static let tags = "detailTags"
     static let editFab = "detailEditFab"
     static let body = "detailBody"
+    static let artifactHint = "detailArtifactHint"
 }
 
 /// Detail sync chip (Android `detailSyncStatus*` + label mapping).
