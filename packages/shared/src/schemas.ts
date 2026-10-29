@@ -30,6 +30,11 @@ export const NotebookUpdateSchema = z.object({
   sortOrder: z.number().int().optional(),
 });
 
+/** Optional UI language for the Artifact Library's initial name. */
+export const ArtifactLibraryEnsureSchema = z.object({
+  locale: z.string().trim().min(1).max(35).optional(),
+});
+
 export const MemoCreateSchema = z.object({
   notebookId: z.string().trim().min(1),
   title: z.string().trim().max(160).optional(),

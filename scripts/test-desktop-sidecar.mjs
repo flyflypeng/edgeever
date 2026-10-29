@@ -587,6 +587,21 @@ const blockedNotebookIds = new Set((await request("notebook.list")).notebooks.ma
 assert.equal(blockedNotebookIds.has(blockedNotebook.id), true, "a notebook with notes in a child should stay");
 assert.equal(blockedNotebookIds.has(blockedChild.id), true, "a child notebook that still has notes should stay");
 
+// The Artifact Library arrives through the notebook change log; its system
+// kind must survive the mirror and keep it undeletable offline.
+const artifactLibrary = {
+  id: "nb_artifact_library", parentId: null, name: "Agent 制品", slug: "agent-制品", icon: null, color: null,
+  sortOrder: 0, createdAt: "2026-10-29T00:00:00.000Z", updatedAt: "2026-10-29T00:00:00.000Z", systemKind: "artifact_library",
+};
+await request("sync.apply", { changes: [{ entityType: "notebook", operation: "upsert", entityId: artifactLibrary.id, notebook: artifactLibrary }] });
+const artifactFolder = (await request("notebook.create", { name: "Project A", parentId: artifactLibrary.id })).notebook;
+const mirroredNotebooks = (await request("notebook.list")).notebooks;
+assert.equal(mirroredNotebooks.find((notebook) => notebook.id === artifactLibrary.id)?.systemKind, "artifact_library");
+assert.equal(artifactFolder.systemKind, null, "Artifact Folders are ordinary notebooks under the library");
+await assert.rejects(request("notebook.delete", { notebookId: artifactLibrary.id }), /artifact_library_protected/);
+await request("notebook.delete", { notebookId: artifactFolder.id });
+assert.ok((await request("notebook.list")).notebooks.some((notebook) => notebook.id === artifactLibrary.id));
+
 // Reproduce the installed client's failed notebook acknowledgement with notes
 // and a child already referring to the placeholder.
 const pendingNotebook = (await request("notebook.create", { name: "Notebook remap regression" })).notebook;

@@ -9,9 +9,10 @@ import type { Notebook } from "@edgeever/shared";
 
 // Types derived from App.tsx
 export type MemoDeleteConfirmation = { kind: "single" | "bulk"; memoIds: string[]; permanent: boolean };
+// `artifact` switches the wording to Artifact Folders / the Artifact Library.
 export type NotebookNameDialogState =
-  | { mode: "create"; parentId: string | null }
-  | { mode: "rename"; notebook: Notebook };
+  | { mode: "create"; parentId: string | null; artifact?: boolean }
+  | { mode: "rename"; notebook: Notebook; artifact?: boolean };
 
 export const AppConfirmDialog = ({
   cancelLabel,
@@ -133,7 +134,13 @@ export const NotebookNameDialog = ({
   const inputRef = useRef<HTMLInputElement | null>(null);
   const trimmedName = name.trim();
   const unchanged = dialog.mode === "rename" && trimmedName === dialog.notebook.name;
-  const title = dialog.mode === "create" ? t("dialogs.notebookName.createTitle") : t("dialogs.notebookName.renameTitle");
+  const artifactLibraryRename = dialog.mode === "rename" && dialog.notebook.systemKind === "artifact_library";
+  const title = dialog.artifact
+    ? t(dialog.mode === "create" ? "artifactLibrary.folderName.createTitle" : artifactLibraryRename ? "artifactLibrary.folderName.libraryRenameTitle" : "artifactLibrary.folderName.renameTitle")
+    : dialog.mode === "create" ? t("dialogs.notebookName.createTitle") : t("dialogs.notebookName.renameTitle");
+  const description = dialog.artifact
+    ? t(dialog.mode === "create" ? "artifactLibrary.folderName.createDescription" : "artifactLibrary.folderName.renameDescription")
+    : dialog.mode === "create" ? t("dialogs.notebookName.createDescription") : t("dialogs.notebookName.renameDescription");
   const submitLabel = dialog.mode === "create" ? t("dialogs.notebookName.createSubmit") : t("common.save");
 
   useEffect(() => {
@@ -165,7 +172,7 @@ export const NotebookNameDialog = ({
                 {title}
               </DialogTitle>
               <DialogDescription className="mt-1 text-xs leading-5 text-slate-500">
-                {dialog.mode === "create" ? t("dialogs.notebookName.createDescription") : t("dialogs.notebookName.renameDescription")}
+                {description}
               </DialogDescription>
             </div>
           </DialogHeader>
@@ -180,7 +187,7 @@ export const NotebookNameDialog = ({
               value={name}
               disabled={isSaving}
               maxLength={80}
-              placeholder={t("dialogs.notebookName.namePlaceholder")}
+              placeholder={dialog.artifact ? t("artifactLibrary.folderName.namePlaceholder") : t("dialogs.notebookName.namePlaceholder")}
               onChange={(event) => setName(event.target.value)}
             />
           </div>

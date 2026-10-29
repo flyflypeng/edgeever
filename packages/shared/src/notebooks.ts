@@ -32,6 +32,16 @@ export const getNotebookDescendantIds = (notebooks: Notebook[], targetNotebookId
   return descendantIds;
 };
 
+export const findArtifactLibrary = (notebooks: Notebook[]) =>
+  notebooks.find((notebook) => notebook.systemKind === "artifact_library") ?? null;
+
+// The Artifact Library and its Artifact Folders. They form a tree of their
+// own and stay out of the notebook tree.
+export const getArtifactLibraryTreeIds = (notebooks: Notebook[]) => {
+  const library = findArtifactLibrary(notebooks);
+  return new Set(library ? getNotebookDescendantIds(notebooks, library.id) : []);
+};
+
 // Notebooks whose memos a notebook view lists: the notebook alone, or its
 // whole subtree when the account shows descendant notes.
 export const getNotebookScopeIds = (notebooks: Notebook[], targetNotebookId: string, includeDescendants: boolean) =>

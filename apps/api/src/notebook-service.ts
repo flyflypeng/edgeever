@@ -1,4 +1,5 @@
-import type { Notebook, NotebookCreateInput } from "@edgeever/shared";
+import type { Notebook, NotebookCreateInput, NotebookSystemKind } from "@edgeever/shared";
+import { localizeArtifactLibraryName } from "@edgeever/shared/default-workspace-seeds";
 import type { AuditActor } from "./api-context";
 import { AppError } from "./app-error";
 import { auditStatement } from "./audit";
@@ -12,6 +13,8 @@ export { isInboxNotebook, workspaceInboxId } from "./workspace-provisioning";
 export const inboxNotebookIdentitySql = (alias: string) =>
   `(${alias}.id = ${alias}.workspace_id || '_inbox' OR ${alias}.id = 'nb_inbox' OR ${alias}.slug = 'inbox')`;
 
+export const ARTIFACT_LIBRARY_SYSTEM_KIND: NotebookSystemKind = "artifact_library";
+
 export type NotebookRow = {
   id: string;
   parent_id: string | null;
@@ -24,6 +27,7 @@ export type NotebookRow = {
   last_memo_updated_at: string | null;
   created_at: string;
   updated_at: string;
+  system_kind?: string | null;
 };
 
 export const mapNotebook = (row: NotebookRow): Notebook => ({
@@ -38,6 +42,7 @@ export const mapNotebook = (row: NotebookRow): Notebook => ({
   lastMemoUpdatedAt: row.last_memo_updated_at,
   createdAt: row.created_at,
   updatedAt: row.updated_at,
+  systemKind: row.system_kind === ARTIFACT_LIBRARY_SYSTEM_KIND ? ARTIFACT_LIBRARY_SYSTEM_KIND : null,
 });
 
 export const notebookSelectSql = (tail: string) => `
@@ -51,7 +56,8 @@ export const notebookSelectSql = (tail: string) => `
          COUNT(m.id) AS memo_count,
          MAX(m.updated_at) AS last_memo_updated_at,
          n.created_at,
-         n.updated_at
+         n.updated_at,
+         n.system_kind
   FROM notebooks n
   LEFT JOIN memos m ON m.notebook_id = n.id AND m.is_deleted = 0
   ${tail}
@@ -62,7 +68,7 @@ export const listNotebooks = async (db: DatabaseAdapter, workspaceId: string): P
     .prepare(
       notebookSelectSql(
         `WHERE n.workspace_id = ? AND n.is_deleted = 0
-         GROUP BY n.id, n.parent_id, n.name, n.slug, n.icon, n.color, n.sort_order, n.created_at, n.updated_at
+         GROUP BY n.id, n.parent_id, n.name, n.slug, n.icon, n.color, n.sort_order, n.created_at, n.updated_at, n.system_kind
          ORDER BY n.parent_id IS NOT NULL, n.sort_order ASC, n.name ASC`
       )
     )
@@ -138,7 +144,7 @@ export const getNotebook = async (db: DatabaseAdapter, workspaceId: string, id: 
     .prepare(
       notebookSelectSql(
         `WHERE n.id = ? AND n.workspace_id = ? AND n.is_deleted = 0
-         GROUP BY n.id, n.parent_id, n.name, n.slug, n.icon, n.color, n.sort_order, n.created_at, n.updated_at`
+         GROUP BY n.id, n.parent_id, n.name, n.slug, n.icon, n.color, n.sort_order, n.created_at, n.updated_at, n.system_kind`
       )
     )
     .bind(id, workspaceId)
@@ -199,6 +205,10 @@ export const updateNotebookRecord = async (
     throw new AppError("not_found", "Notebook not found", 404);
   }
 
+  if (current.systemKind === ARTIFACT_LIBRARY_SYSTEM_KIND && input.parentId) {
+    throw new AppError("artifact_library_protected", "The Artifact Library cannot be moved.", 400);
+  }
+
   const nextName = input.name ?? current.name;
   const nextParentId = input.parentId === undefined ? current.parentId : input.parentId;
   const nextSortOrder = input.sortOrder ?? current.sortOrder;
@@ -218,6 +228,20 @@ export const updateNotebookRecord = async (
 
     if (await isNotebookDescendant(db, workspaceId, nextParentId, id)) {
       throw new AppError("notebook_cycle", "Notebook cannot be moved into its own descendant.", 409);
+    }
+  }
+
+  if (nextParentId !== current.parentId) {
+    const [currentLibraryId, targetLibraryId] = await Promise.all([
+      findArtifactLibraryAncestorId(db, workspaceId, id),
+      nextParentId ? findArtifactLibraryAncestorId(db, workspaceId, nextParentId) : null,
+    ]);
+    if (currentLibraryId !== targetLibraryId) {
+      throw new AppError(
+        "artifact_location_invalid",
+        "Artifact Folders stay inside the Artifact Library and notebooks stay outside it.",
+        400,
+      );
     }
   }
 
@@ -263,11 +287,11 @@ const listActiveNotebookTree = async (db: DatabaseAdapter, workspaceId: string, 
        INNER JOIN tree t ON n.parent_id = t.id
        WHERE n.workspace_id = ?
      )
-     SELECT n.id, n.slug, n.parent_id
+     SELECT n.id, n.slug, n.parent_id, n.system_kind
      FROM notebooks n
      INNER JOIN tree t ON t.id = n.id
      WHERE n.workspace_id = ? AND n.is_deleted = 0`
-  ).bind(workspaceId, id, workspaceId, workspaceId).all<{ id: string; slug: string | null; parent_id: string | null }>();
+  ).bind(workspaceId, id, workspaceId, workspaceId).all<{ id: string; slug: string | null; parent_id: string | null; system_kind: string | null }>();
 
   return rows.results;
 };
@@ -308,6 +332,9 @@ export const deleteNotebookTree = async (
   if (tree.length === 0) return result([]);
   if (tree.some((notebook) => isInboxNotebook(notebook, workspaceId))) {
     throw new AppError("bad_request", "等待分类不能删除。", 400);
+  }
+  if (tree.some((notebook) => notebook.system_kind === ARTIFACT_LIBRARY_SYSTEM_KIND)) {
+    throw new AppError("artifact_library_protected", "The Artifact Library cannot be deleted.", 400);
   }
 
   const notebookIds = tree.map((notebook) => notebook.id);
@@ -444,4 +471,62 @@ export const isNotebookDescendant = async (
     .first<{ id: string }>();
 
   return Boolean(row);
+};
+
+/** The Artifact Library that contains this notebook (itself included), or null. */
+export const findArtifactLibraryAncestorId = async (db: DatabaseAdapter, workspaceId: string, notebookId: string) => {
+  const row = await db.prepare(
+    `WITH RECURSIVE ancestors(id, parent_id, system_kind, depth) AS (
+       SELECT id, parent_id, system_kind, 0 FROM notebooks WHERE workspace_id = ? AND id = ?
+       UNION ALL
+       SELECT n.id, n.parent_id, n.system_kind, a.depth + 1
+       FROM notebooks n
+       INNER JOIN ancestors a ON n.id = a.parent_id
+       WHERE n.workspace_id = ? AND a.depth < 256
+     )
+     SELECT id FROM ancestors WHERE system_kind = ? LIMIT 1`
+  ).bind(workspaceId, notebookId, workspaceId, ARTIFACT_LIBRARY_SYSTEM_KIND).first<{ id: string }>();
+  return row?.id ?? null;
+};
+
+const findArtifactLibrary = async (db: DatabaseAdapter, workspaceId: string) => {
+  const row = await db.prepare(
+    `SELECT id FROM notebooks WHERE workspace_id = ? AND system_kind = ? AND is_deleted = 0`
+  ).bind(workspaceId, ARTIFACT_LIBRARY_SYSTEM_KIND).first<{ id: string }>();
+  return row ? getNotebook(db, workspaceId, row.id) : null;
+};
+
+/**
+ * Returns the workspace's Artifact Library, creating it on first use. The
+ * partial unique index settles concurrent creators; a loser re-reads.
+ */
+export const ensureArtifactLibrary = async (
+  db: DatabaseAdapter,
+  workspaceId: string,
+  locale: string | null | undefined,
+  actor: AuditActor,
+) => {
+  const existing = await findArtifactLibrary(db, workspaceId);
+  if (existing) return existing;
+
+  const id = createId("nb");
+  const now = isoNow();
+  const name = localizeArtifactLibraryName(locale);
+  const sortOrder = Date.now();
+  await db.batch([
+    db.prepare(
+      `INSERT INTO notebooks (id, workspace_id, parent_id, name, slug, sort_order, system_kind, created_at, updated_at)
+       VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT DO NOTHING`
+    ).bind(id, workspaceId, name, slugify(name), sortOrder, ARTIFACT_LIBRARY_SYSTEM_KIND, now, now),
+    db.prepare(
+      `INSERT INTO audit_events (id, actor_type, actor_id, action, entity_type, entity_id, metadata_json, created_at)
+       SELECT ?, ?, ?, 'notebook.create', 'notebook', ?, ?, ? WHERE changes() = 1`
+    ).bind(createId("audit"), actor.actorType, actor.actorId, id,
+      JSON.stringify({ name, parentId: null, sortOrder, systemKind: ARTIFACT_LIBRARY_SYSTEM_KIND }), now),
+  ]);
+
+  const library = await findArtifactLibrary(db, workspaceId);
+  if (!library) throw new AppError("not_found", "Artifact Library not found after create", 404);
+  return library;
 };

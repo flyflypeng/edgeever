@@ -611,6 +611,7 @@ export const deleteLocalNotebookTree = async (scope: string, notebookId: string)
   if (selected.length === 0) return [notebookId];
   if (selected.some((notebook) => notebook.memoCount > 0)) throw new NotebookNotEmptyError();
   if (selected.some((notebook) => isProtectedInboxNotebook(notebook))) throw new Error("inbox_not_deletable");
+  if (selected.some((notebook) => notebook.systemKind === "artifact_library")) throw new Error("artifact_library_protected");
   await Promise.all(selected.map((notebook) => localDb.notebooks.delete([scope, notebook.id])));
   return [...ids].reverse();
 };

@@ -1,7 +1,7 @@
 use rusqlite::{Connection, OptionalExtension, Transaction};
 use serde_json::{json, Value};
 
-use crate::catalog::is_inbox_notebook;
+use crate::catalog::{is_inbox_notebook, ARTIFACT_LIBRARY_SYSTEM_KIND};
 use crate::memo::{create_memo, memo_value};
 use crate::{bool_param, enqueue_change, memo_remap_base_key, meta_value, set_meta, string_param};
 
@@ -897,7 +897,11 @@ fn apply_one_sync_change(
             && active_inbox_exists_except(tx, &entity_id)?
             && !notebook_is_active(tx, &entity_id)?;
         let is_deleted = i64::from(keep_inactive);
-        tx.execute("INSERT INTO notebooks (id, parent_id, name, slug, icon, color, sort_order, created_at, updated_at, is_deleted, deleted_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, CASE WHEN ?10 = 1 THEN strftime('%Y-%m-%dT%H:%M:%fZ','now') ELSE NULL END) ON CONFLICT(id) DO UPDATE SET parent_id=excluded.parent_id, name=excluded.name, slug=excluded.slug, icon=excluded.icon, color=excluded.color, sort_order=excluded.sort_order, updated_at=excluded.updated_at, is_deleted=excluded.is_deleted, deleted_at=excluded.deleted_at", rusqlite::params![entity_id, parent_id, string_param(notebook, "name")?, slug, notebook.get("icon").and_then(Value::as_str), notebook.get("color").and_then(Value::as_str), notebook.get("sortOrder").and_then(Value::as_i64).unwrap_or(0), string_param(notebook, "createdAt")?, string_param(notebook, "updatedAt")?, is_deleted]).map_err(|e| e.to_string())?;
+        let system_kind = notebook
+            .get("systemKind")
+            .and_then(Value::as_str)
+            .filter(|kind| *kind == ARTIFACT_LIBRARY_SYSTEM_KIND);
+        tx.execute("INSERT INTO notebooks (id, parent_id, name, slug, icon, color, sort_order, created_at, updated_at, is_deleted, deleted_at, system_kind) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, CASE WHEN ?10 = 1 THEN strftime('%Y-%m-%dT%H:%M:%fZ','now') ELSE NULL END, ?11) ON CONFLICT(id) DO UPDATE SET parent_id=excluded.parent_id, name=excluded.name, slug=excluded.slug, icon=excluded.icon, color=excluded.color, sort_order=excluded.sort_order, updated_at=excluded.updated_at, is_deleted=excluded.is_deleted, deleted_at=excluded.deleted_at, system_kind=excluded.system_kind", rusqlite::params![entity_id, parent_id, string_param(notebook, "name")?, slug, notebook.get("icon").and_then(Value::as_str), notebook.get("color").and_then(Value::as_str), notebook.get("sortOrder").and_then(Value::as_i64).unwrap_or(0), string_param(notebook, "createdAt")?, string_param(notebook, "updatedAt")?, is_deleted, system_kind]).map_err(|e| e.to_string())?;
         return Ok(());
     }
     if operation == "delete" {

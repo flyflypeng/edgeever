@@ -16,6 +16,9 @@ import {
   PieChart,
   Table2,
   BookPlus,
+  Bot,
+  FolderPlus,
+  Pencil,
   ArrowDownWideNarrow,
   Notebook as NotebookIcon,
   Tag,
@@ -51,10 +54,11 @@ import { api, getConfiguredDesktopApiBaseUrl } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { useShowDescendantNotesPreference } from "@/lib/descendant-notes-preference";
 import { BETA_BADGE_CLASSNAME } from "@/lib/workspace-ui";
-import type { Notebook, AuthUser, NoteCreateKind } from "@edgeever/shared";
+import { findArtifactLibrary, getArtifactLibraryTreeIds, type Notebook, type AuthUser, type NoteCreateKind } from "@edgeever/shared";
 import type { NotebookDropPosition, NotebookSortMode } from "@/lib/app-helpers";
 import type { SyncQueueSummary } from "@/lib/sync-queue";
 import {
+  ARTIFACT_FOLDER_SORT_STORAGE_KEY,
   buildNotebookTree,
   getNotebookSortOptions,
   getNotebookSortComparator,
@@ -487,6 +491,8 @@ export const NotebookPane = ({
   selectedNotebookId,
   onSelect,
   onCreateNotebook,
+  onOpenArtifactLibrary,
+  onCreateArtifactFolder,
   onRenameNotebook,
   onDeleteNotebook,
   onMoveNotebook,
@@ -525,6 +531,10 @@ export const NotebookPane = ({
   selectedNotebookId: string | null;
   onSelect: (notebookId: string) => void;
   onCreateNotebook: (parentId?: string | null) => void;
+  /** Selects the Artifact Library, creating it on first use. */
+  onOpenArtifactLibrary: () => void;
+  /** Opens the name dialog for a top-level Artifact Folder, creating the library on first use. */
+  onCreateArtifactFolder: () => void;
   onRenameNotebook: (notebook: Notebook) => void;
   onDeleteNotebook: (notebook: Notebook) => void;
   onMoveNotebook: (notebookId: string, targetNotebookId: string, position: NotebookDropPosition) => void;
@@ -570,11 +580,17 @@ export const NotebookPane = ({
   const notebookScrollRef = useRef<HTMLDivElement | null>(null);
   const notebookDragScrollFrameRef = useRef<number | null>(null);
   const [expandSiblingsRequest, setExpandSiblingsRequest] = useState<{ parentId: string | null; token: number } | null>(null);
-  const [notebookSortMode, setNotebookSortMode] = useState<NotebookSortMode>(readNotebookSortPreference);
+  const [notebookSortMode, setNotebookSortMode] = useState<NotebookSortMode>(() => readNotebookSortPreference());
+  const [artifactFolderSortMode, setArtifactFolderSortMode] = useState<NotebookSortMode>(() => readNotebookSortPreference(ARTIFACT_FOLDER_SORT_STORAGE_KEY));
   const [collapsedNotebookIds, setCollapsedNotebookIds] = useState<Set<string>>(readNotebookTreeCollapsedIdsPreference);
 
   const handleMoveNotebook = useCallback((notebookId: string, targetNotebookId: string, position: NotebookDropPosition) => {
     setNotebookSortMode("custom");
+    onMoveNotebook(notebookId, targetNotebookId, position);
+  }, [onMoveNotebook]);
+
+  const handleMoveArtifactFolder = useCallback((notebookId: string, targetNotebookId: string, position: NotebookDropPosition) => {
+    setArtifactFolderSortMode("custom");
     onMoveNotebook(notebookId, targetNotebookId, position);
   }, [onMoveNotebook]);
 
@@ -648,13 +664,30 @@ export const NotebookPane = ({
     refetchOnMount: "always",
   });
   const sharedNotebookIds = useMemo(() => new Set(notebookSharesQuery.data?.shares.map(share => share.notebookId) ?? []), [notebookSharesQuery.data]);
-  const tree = useMemo(() => buildNotebookTree(notebooks, getNotebookSortComparator(notebookSortMode)), [notebooks, notebookSortMode]);
+  // The Artifact Library subtree is its own section, never part of the notebook tree.
+  const artifactLibrary = useMemo(() => findArtifactLibrary(notebooks), [notebooks]);
+  const artifactTreeIds = useMemo(() => getArtifactLibraryTreeIds(notebooks), [notebooks]);
+  const tree = useMemo(
+    () => buildNotebookTree(notebooks.filter((notebook) => !artifactTreeIds.has(notebook.id)), getNotebookSortComparator(notebookSortMode)),
+    [artifactTreeIds, notebooks, notebookSortMode],
+  );
+  const artifactFolderTree = useMemo(
+    () => buildNotebookTree(notebooks.filter((notebook) => artifactTreeIds.has(notebook.id)), getNotebookSortComparator(artifactFolderSortMode))
+      .find((node) => node.id === artifactLibrary?.id)?.children ?? [],
+    [artifactFolderSortMode, artifactLibrary?.id, artifactTreeIds, notebooks],
+  );
+  const artifactsActive = view === "notebook" && selectedNotebookId !== null && artifactTreeIds.has(selectedNotebookId);
   const isLoading = notebooksQuery.isLoading;
   const activeNotebookSortLabel = notebookSortOptions.find((option) => option.value === notebookSortMode)?.label ?? t("options.notebookSort.nameAsc");
+  const activeArtifactFolderSortLabel = notebookSortOptions.find((option) => option.value === artifactFolderSortMode)?.label ?? t("options.notebookSort.nameAsc");
 
   useEffect(() => {
     writeNotebookSortPreference(notebookSortMode);
   }, [notebookSortMode]);
+
+  useEffect(() => {
+    writeNotebookSortPreference(artifactFolderSortMode, ARTIFACT_FOLDER_SORT_STORAGE_KEY);
+  }, [artifactFolderSortMode]);
 
   useEffect(() => {
     writeNotebookTreeCollapsedIdsPreference(collapsedNotebookIds);
@@ -688,7 +721,7 @@ export const NotebookPane = ({
 
       selectedNode?.scrollIntoView({ block: "nearest" });
     }, 0);
-  }, [selectedNotebookId, tree]);
+  }, [selectedNotebookId, tree, artifactFolderTree]);
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden" data-notebook-sidebar-collapsed={collapsed ? "true" : "false"}>
@@ -886,6 +919,111 @@ export const NotebookPane = ({
           </div>
         )}
 
+        <section aria-label={t("artifactLibrary.title")} data-artifact-library-section>
+          <div className="group mb-1 flex items-center justify-between gap-2">
+            <button
+              type="button"
+              className={cn(
+                "flex h-9 min-w-0 flex-1 items-center gap-3 rounded-md px-3 text-left text-xs font-medium leading-none tracking-wide transition-colors duration-200",
+                artifactLibrary && selectedNotebookId === artifactLibrary.id && view === "notebook"
+                  ? "edgeever-workspace-selection text-slate-950"
+                  : "text-slate-500 hover:bg-slate-50 hover:text-slate-900"
+              )}
+              aria-current={artifactLibrary && selectedNotebookId === artifactLibrary.id && view === "notebook" ? "page" : undefined}
+              onClick={onOpenArtifactLibrary}
+            >
+              <span className="flex h-4 w-4 shrink-0 items-center justify-center"><Bot className="h-4 w-4" /></span>
+              <span className="min-w-0 flex-1 truncate">{artifactLibrary?.name ?? t("artifactLibrary.title")}</span>
+            </button>
+            <TooltipProvider delayDuration={0} skipDelayDuration={0}>
+              <div className="flex items-center gap-1 opacity-100 transition-opacity duration-200 lg:opacity-0 lg:group-hover:opacity-100 lg:group-focus-within:opacity-100">
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      className="flex h-6 w-6 items-center justify-center rounded-md text-slate-500 transition-colors duration-200 hover:bg-slate-100 hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400/70"
+                      type="button"
+                      aria-label={t("artifactLibrary.newFolder")}
+                      onClick={onCreateArtifactFolder}
+                    >
+                      <FolderPlus className="h-3.5 w-3.5" />
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">{t("artifactLibrary.newFolder")}</TooltipContent>
+                </Tooltip>
+                {artifactLibrary ? (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button
+                        className="flex h-6 w-6 items-center justify-center rounded-md text-slate-500 transition-colors duration-200 hover:bg-slate-100 hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400/70"
+                        type="button"
+                        aria-label={t("artifactLibrary.rename")}
+                        onClick={() => onRenameNotebook(artifactLibrary)}
+                      >
+                        <Pencil className="h-3.5 w-3.5" />
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom">{t("artifactLibrary.rename")}</TooltipContent>
+                  </Tooltip>
+                ) : null}
+                <DropdownMenu>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <DropdownMenuTrigger asChild>
+                        <button
+                          className="flex h-6 w-6 items-center justify-center rounded-md text-slate-500 transition-colors duration-200 hover:bg-slate-100 hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400/70"
+                          type="button"
+                          aria-label={t("artifactLibrary.sortTitle", { label: activeArtifactFolderSortLabel })}
+                        >
+                          <ArrowDownWideNarrow className="h-3.5 w-3.5" />
+                        </button>
+                      </DropdownMenuTrigger>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom">
+                      {t("artifactLibrary.sortTitle", { label: activeArtifactFolderSortLabel })}
+                    </TooltipContent>
+                  </Tooltip>
+                  <DropdownMenuContent align="end" className="w-36">
+                    {notebookSortOptions.map((option) => (
+                      <DropdownMenuCheckboxItem
+                        key={option.value}
+                        checked={artifactFolderSortMode === option.value}
+                        onSelect={() => setArtifactFolderSortMode(option.value)}
+                      >
+                        {option.label}
+                      </DropdownMenuCheckboxItem>
+                    ))}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </div>
+            </TooltipProvider>
+          </div>
+          {artifactFolderTree.length > 0 ? (
+            <div className="mb-4 space-y-1" data-artifact-folder-tree>
+              {artifactFolderTree.map((node) => (
+                <NotebookTreeItem
+                  key={node.id}
+                  node={node}
+                  depth={0}
+                  selectedNotebookId={selectedNotebookId}
+                  onSelect={onSelect}
+                  onCreateNotebook={onCreateNotebook}
+                  onRenameNotebook={onRenameNotebook}
+                  onDeleteNotebook={onDeleteNotebook}
+                  onMoveNotebook={handleMoveArtifactFolder}
+                  onMoveMemos={onMoveMemos}
+                  onDragScroll={handleNotebookScrollDragOver}
+                  collapsedNotebookIds={collapsedNotebookIds}
+                  onOpenChange={handleNotebookOpenChange}
+                  expandSiblingsRequest={expandSiblingsRequest}
+                  onExpandSiblings={handleExpandNotebookSiblings}
+                  showDescendantNotes={showDescendantNotes}
+                  artifactFolder
+                />
+              ))}
+            </div>
+          ) : null}
+        </section>
+
       </div>
       </div>
 
@@ -949,10 +1087,16 @@ export const NotebookPane = ({
                 onClick={onBackToList}
               />
               <SidebarRailButton
-                active={!jotActive && !jotReviewActive && view === "notebook" && selectedNotebookId !== null}
+                active={!jotActive && !jotReviewActive && view === "notebook" && selectedNotebookId !== null && !artifactsActive}
                 icon={<NotebookIcon className="h-4 w-4" />}
                 label={t("notebookPane.notebooks")}
                 onClick={onToggleCollapsed}
+              />
+              <SidebarRailButton
+                active={!jotActive && !jotReviewActive && artifactsActive}
+                icon={<Bot className="h-4 w-4" />}
+                label={artifactLibrary?.name ?? t("artifactLibrary.title")}
+                onClick={onOpenArtifactLibrary}
               />
               <SidebarRailButton icon={<Tag className="h-4 w-4" />} label={t("mobileSheets.tags")} onClick={onOpenTags} />
               <SidebarRailButton icon={<Paperclip className="h-4 w-4" />} label={t("mobileSheets.assets")} onClick={onOpenAssets} />

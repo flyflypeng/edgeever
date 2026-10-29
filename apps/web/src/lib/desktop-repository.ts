@@ -7,7 +7,7 @@ import type {
   DesktopRpcParams,
   DesktopRpcResponses,
 } from "@edgeever/shared";
-import { docToMarkdown, docToText, markdownToDoc, type MemoDetail } from "@edgeever/shared";
+import { docToMarkdown, docToText, findArtifactLibrary, markdownToDoc, type MemoDetail } from "@edgeever/shared";
 import { localizeDefaultMemoTemplate } from "@edgeever/shared/memo-template-seeds";
 import type { EdgeEverRepository } from "@/lib/repository";
 import { api, getConfiguredDesktopApiBaseUrl } from "@/lib/api";
@@ -144,6 +144,18 @@ export const createDesktopRepository = (): EdgeEverRepository => ({
     window.dispatchEvent(new CustomEvent("edgeever:sync-queue-changed"));
     return result;
   }),
+
+  ensureArtifactLibrary: async (locale) => {
+    const local = findArtifactLibrary((await request("notebook.list", {})).notebooks);
+    if (local) return { notebook: local };
+    // The server owns creation so concurrent devices converge on one library;
+    // the mirror then stores it like any synced notebook.
+    const result = await api.ensureArtifactLibrary(locale);
+    await request("sync.apply", {
+      changes: [{ entityType: "notebook", operation: "upsert", entityId: result.notebook.id, notebook: result.notebook, memo: null }],
+    });
+    return result;
+  },
 
   listTemplates: async () => {
     const local = await request("template.list", {});

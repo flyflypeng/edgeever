@@ -45,7 +45,7 @@ import {
 } from "@/lib/mobile-editor";
 import { cn } from "@/lib/utils";
 import { isBrowserOffline, isBrowserOnline } from "@/lib/network-status";
-import { createDefaultDiagramDocument, createDefaultInfographicDocument, hasPosterDocumentMarker, posterFallbackMarkdown, serializePosterDocument, createDefaultTableDocument, diagramFallbackMarkdown, getNotebookScopeIds, hasTableDocumentMarker, infographicFallbackMarkdown, markdownToDoc, parseDiagramDocument, parseInfographicDocument, parseTableDocument, serializeDiagramDocument, serializeInfographicDocument, serializeTableDocument, tableFallbackMarkdown, type NoteCreateKind, type Notebook, type AuthUser, type MemoSummary, type MemoDetail, type MemoTemplate as SavedMemoTemplate, getMemoDisplayTitle } from "@edgeever/shared";
+import { createDefaultDiagramDocument, createDefaultInfographicDocument, hasPosterDocumentMarker, posterFallbackMarkdown, serializePosterDocument, createDefaultTableDocument, diagramFallbackMarkdown, getArtifactLibraryTreeIds, getNotebookScopeIds, hasTableDocumentMarker, infographicFallbackMarkdown, markdownToDoc, parseDiagramDocument, parseInfographicDocument, parseTableDocument, serializeDiagramDocument, serializeInfographicDocument, serializeTableDocument, tableFallbackMarkdown, type NoteCreateKind, type Notebook, type AuthUser, type MemoSummary, type MemoDetail, type MemoTemplate as SavedMemoTemplate, getMemoDisplayTitle } from "@edgeever/shared";
 import { toggleMobileMemoSelection } from "@edgeever/shared/mobile-ui";
 import type {
   Pane,
@@ -703,6 +703,7 @@ export const WorkspaceApp = ({
       (notebook) => notebook.id === "nb_inbox" || notebook.slug === "inbox" || notebook.name === "等待分类"
     ) ?? null;
   const defaultMemoNotebookId = inboxNotebook?.id ?? null;
+  const artifactTreeIds = useMemo(() => getArtifactLibraryTreeIds(notebooks), [notebooks]);
   const createMemoNotebookId = getCreateMemoNotebookId(selectedNotebookId, notebooks, defaultMemoNotebookId);
   const canCreateMemo = Boolean(createMemoNotebookId && memoView !== "trash");
   const memoSelectionModeActive = memoSelectionMode || selectedMemoIds.size > 0;
@@ -1230,13 +1231,27 @@ export const WorkspaceApp = ({
       await queryClient.invalidateQueries({ queryKey: ["notebooks"] });
       await queryClient.invalidateQueries({ queryKey: ["memos"] });
     },
-    onError: (error) => {
+    onError: (error, notebookId) => {
+      const artifactFolder = artifactTreeIds.has(notebookId);
       setNotebookDeleteConfirmation(null);
       setAppNoticeDialog({
-        title: t("workspaceDialogs.deleteNotebookFailedTitle"),
+        title: t(artifactFolder ? "artifactLibrary.deleteFolder.failedTitle" : "workspaceDialogs.deleteNotebookFailedTitle"),
         description: isNotebookNotEmptyError(error)
-          ? t("workspaceDialogs.deleteNotebookNotEmpty")
+          ? t(artifactFolder ? "artifactLibrary.deleteFolder.notEmpty" : "workspaceDialogs.deleteNotebookNotEmpty")
           : t("workspaceDialogs.deleteNotebookFailed"),
+      });
+    },
+  });
+
+  const ensureArtifactLibraryMutation = useMutation({
+    mutationFn: () => repository.ensureArtifactLibrary(i18n.resolvedLanguage),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["notebooks"] });
+    },
+    onError: () => {
+      setAppNoticeDialog({
+        title: t("artifactLibrary.openFailedTitle"),
+        description: t("artifactLibrary.openFailedDescription"),
       });
     },
   });
@@ -1537,11 +1552,27 @@ export const WorkspaceApp = ({
   }, [selectedNotebook?.id, selectionMoveNotebookOptions, selectionMoveTargetNotebookId]);
 
   const handleCreateNotebook = (parentId?: string | null) => {
-    setNotebookNameDialog({ mode: "create", parentId: parentId ?? null });
+    setNotebookNameDialog({ mode: "create", parentId: parentId ?? null, artifact: Boolean(parentId && artifactTreeIds.has(parentId)) });
   };
 
   const handleRenameNotebook = (notebook: Notebook) => {
-    setNotebookNameDialog({ mode: "rename", notebook });
+    setNotebookNameDialog({ mode: "rename", notebook, artifact: artifactTreeIds.has(notebook.id) });
+  };
+
+  // The Artifact Library is created lazily the first time the user opens it
+  // or adds a folder.
+  const handleOpenArtifactLibrary = () => {
+    if (ensureArtifactLibraryMutation.isPending) return;
+    ensureArtifactLibraryMutation.mutate(undefined, {
+      onSuccess: ({ notebook }) => handleSelectNotebook(notebook.id),
+    });
+  };
+
+  const handleCreateArtifactFolder = () => {
+    if (ensureArtifactLibraryMutation.isPending) return;
+    ensureArtifactLibraryMutation.mutate(undefined, {
+      onSuccess: ({ notebook }) => setNotebookNameDialog({ mode: "create", parentId: notebook.id, artifact: true }),
+    });
   };
 
   const handleSubmitNotebookName = (name: string) => {
@@ -1574,6 +1605,13 @@ export const WorkspaceApp = ({
   };
 
   const handleDeleteNotebook = (notebook: Notebook) => {
+    if (notebook.systemKind === "artifact_library") {
+      setAppNoticeDialog({
+        title: t("artifactLibrary.protectedTitle"),
+        description: t("artifactLibrary.protectedDescription"),
+      });
+      return;
+    }
     if (notebook.id === "nb_inbox" || notebook.slug === "inbox" || notebook.name === "等待分类") {
       setAppNoticeDialog({
         title: t("workspace.inboxDeleteTitle"),
@@ -2069,10 +2107,21 @@ export const WorkspaceApp = ({
       return;
     }
 
+    const parentId = position === "inside" ? target.id : target.parentId;
+    // Mirrors the server's artifact_location_invalid rule so an offline-first
+    // move is refused up front instead of failing later in the sync queue.
+    if (artifactTreeIds.has(notebookId) !== Boolean(parentId && artifactTreeIds.has(parentId))) {
+      setAppNoticeDialog({
+        title: t("artifactLibrary.locationInvalidTitle"),
+        description: t("artifactLibrary.locationInvalidDescription"),
+      });
+      return;
+    }
+
     updateNotebookMutation.mutate({
       notebookId,
       payload: {
-        parentId: position === "inside" ? target.id : target.parentId,
+        parentId,
         sortOrder: position === "inside" ? Date.now() : getNotebookDropSortOrder(notebooks, target, position),
       },
     });
@@ -3329,6 +3378,8 @@ export const WorkspaceApp = ({
                   onSelect={handleSelectNotebook}
                   onCreateMemo={handleCreateMemo}
                   onCreateNotebook={handleCreateNotebook}
+                  onOpenArtifactLibrary={handleOpenArtifactLibrary}
+                  onCreateArtifactFolder={handleCreateArtifactFolder}
                   onRenameNotebook={handleRenameNotebook}
                   onDeleteNotebook={handleDeleteNotebook}
                   onMoveNotebook={handleMoveNotebook}
@@ -3937,8 +3988,8 @@ export const WorkspaceApp = ({
       )}
       {notebookDeleteConfirmation && (
         <AppConfirmDialog
-          title={t("workspaceDialogs.deleteNotebookTitle", { name: notebookDeleteConfirmation.name })}
-          description={t("workspaceDialogs.deleteNotebookDescription")}
+          title={t(artifactTreeIds.has(notebookDeleteConfirmation.id) ? "artifactLibrary.deleteFolder.title" : "workspaceDialogs.deleteNotebookTitle", { name: notebookDeleteConfirmation.name })}
+          description={t(artifactTreeIds.has(notebookDeleteConfirmation.id) ? "artifactLibrary.deleteFolder.description" : "workspaceDialogs.deleteNotebookDescription")}
           confirmLabel={t("common.delete")}
           closeOnBrowserBack={false}
           isWorking={deleteNotebookMutation.isPending}

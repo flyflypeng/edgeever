@@ -48,6 +48,17 @@ export const DEFAULT_NOTEBOOK_SEEDS: readonly DefaultNotebookSeed[] = [
   },
 ];
 
+const ARTIFACT_LIBRARY_NAMES: Record<SupportedLocale, string> = {
+  "zh-CN": "Agent 制品",
+  "en-US": "Agent Artifacts",
+  ja: "Agent 成果物",
+  pl: "Artefakty agenta",
+};
+
+/** Initial name of the lazily created Artifact Library; users may rename it. */
+export const localizeArtifactLibraryName = (locale: string | null | undefined) =>
+  ARTIFACT_LIBRARY_NAMES[resolveSupportedLocale(locale)];
+
 export const localizeDefaultNotebookName = (
   seed: DefaultNotebookSeed,
   locale: string | null | undefined,

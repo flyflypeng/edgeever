@@ -1188,6 +1188,12 @@ export const createEdgeEverClient = (options: EdgeEverClientOptions = {}) => {
         method: "POST",
       }),
 
+    ensureArtifactLibrary: (locale?: string) =>
+      request<NotebookResponse>("/api/v1/artifact-library", {
+        method: "POST",
+        body: JSON.stringify(locale ? { locale } : {}),
+      }),
+
     listTags: () => request<ListTagsResponse>("/api/v1/tags"),
 
     renameTag: (tag: string, name: string) =>

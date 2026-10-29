@@ -1,7 +1,7 @@
 import { lazy, Suspense, useState, useEffect, useRef, type DragEvent } from "react";
 import { useTranslation } from "react-i18next";
 import * as m from "motion/react-m";
-import { ChevronDown, MoreHorizontal, Notebook as NotebookIcon, Plus, Pencil, Trash2, Share2, Globe } from "lucide-react";
+import { ChevronDown, Folder, MoreHorizontal, Notebook as NotebookIcon, Plus, Pencil, Trash2, Share2, Globe } from "lucide-react";
 import type { NotebookNode, NotebookDropPosition } from "@/lib/app-helpers";
 import {
   hasMemoDragData,
@@ -46,6 +46,7 @@ export const NotebookTreeItem = ({
   showDescendantNotes,
   sharedNotebookIds,
   inheritedPublic = false,
+  artifactFolder = false,
 }: {
   node: NotebookNode;
   depth: number;
@@ -64,6 +65,8 @@ export const NotebookTreeItem = ({
   showDescendantNotes: boolean;
   sharedNotebookIds?: ReadonlySet<string>;
   inheritedPublic?: boolean;
+  /** An Artifact Folder inside the Artifact Library: folder wording, no sharing. */
+  artifactFolder?: boolean;
 }) => {
   const { t } = useTranslation();
   const [shareOpen, setShareOpen] = useState(false);
@@ -75,6 +78,9 @@ export const NotebookTreeItem = ({
   const showsSplitCount = !showDescendantNotes && hasChildren;
   const selected = node.id === selectedNotebookId;
   const isInbox = node.slug === "inbox";
+  const TreeIcon = artifactFolder ? Folder : NotebookIcon;
+  const newChildLabel = t(artifactFolder ? "artifactLibrary.folder.newChild" : "notebookTree.newChild");
+  const deleteLabel = t(artifactFolder ? "artifactLibrary.folder.delete" : "notebookTree.deleteNotebook");
   const [dropPosition, setDropPosition] = useState<NotebookDropPosition | null>(null);
   const [actionsOpen, setActionsOpen] = useState(false);
   const actionsRef = useRef<HTMLDivElement>(null);
@@ -278,7 +284,7 @@ export const NotebookTreeItem = ({
                   }
                 }}
               >
-                <NotebookIcon className={cn("h-4 w-4 shrink-0 transition-colors duration-200", selected ? "text-slate-950" : "text-slate-500")} />
+                <TreeIcon className={cn("h-4 w-4 shrink-0 transition-colors duration-200", selected ? "text-slate-950" : "text-slate-500")} />
                 <span
                   className={cn(
                     "truncate transition-colors duration-200",
@@ -335,7 +341,7 @@ export const NotebookTreeItem = ({
                     }}
                   >
                     <Plus className="h-4 w-4" />
-                    {t("notebookTree.newChild")}
+                    {newChildLabel}
                   </button>
                   <button
                     className="flex h-9 w-full items-center gap-2 rounded-sm px-2 text-left text-xs outline-none hover:bg-slate-100"
@@ -349,13 +355,15 @@ export const NotebookTreeItem = ({
                     <Pencil className="h-4 w-4" />
                     {t("notebookTree.rename")}
                   </button>
-                  <button
-                    className="flex h-9 w-full items-center gap-2 rounded-sm px-2 text-left text-xs outline-none hover:bg-slate-100"
-                    type="button"
-                    onClick={event => { event.stopPropagation(); setActionsOpen(false); setShareOpen(true); }}
-                  >
-                    <Share2 className="h-4 w-4" />{shareActionLabel}
-                  </button>
+                  {artifactFolder ? null : (
+                    <button
+                      className="flex h-9 w-full items-center gap-2 rounded-sm px-2 text-left text-xs outline-none hover:bg-slate-100"
+                      type="button"
+                      onClick={event => { event.stopPropagation(); setActionsOpen(false); setShareOpen(true); }}
+                    >
+                      <Share2 className="h-4 w-4" />{shareActionLabel}
+                    </button>
+                  )}
                 {isInbox ? (
                   <>
                     <div className="-mx-1 my-1 h-px bg-slate-100" />
@@ -388,7 +396,7 @@ export const NotebookTreeItem = ({
                       }}
                     >
                       <Trash2 className="h-4 w-4" />
-                      {t("notebookTree.deleteNotebook")}
+                      {deleteLabel}
                     </button>
                   </>
                 )}
@@ -409,7 +417,7 @@ export const NotebookTreeItem = ({
             onClick={() => onCreateNotebook(node.id)}
           >
             <Plus className="h-4 w-4" />
-            {t("notebookTree.newChild")}
+            {newChildLabel}
           </ContextMenuItem>
           <ContextMenuItem
             className="flex h-9 items-center gap-2 px-3 text-xs text-slate-700 hover:bg-slate-50 cursor-pointer outline-none"
@@ -418,9 +426,11 @@ export const NotebookTreeItem = ({
             <Pencil className="h-4 w-4" />
             {t("notebookTree.rename")}
           </ContextMenuItem>
-          <ContextMenuItem className="flex h-9 items-center gap-2 px-3 text-xs cursor-pointer" onClick={() => setShareOpen(true)}>
-            <Share2 className="h-4 w-4" />{shareActionLabel}
-          </ContextMenuItem>
+          {artifactFolder ? null : (
+            <ContextMenuItem className="flex h-9 items-center gap-2 px-3 text-xs cursor-pointer" onClick={() => setShareOpen(true)}>
+              <Share2 className="h-4 w-4" />{shareActionLabel}
+            </ContextMenuItem>
+          )}
           {isInbox ? (
             <>
               <ContextMenuSeparator className="my-1 h-px bg-slate-100" />
@@ -445,7 +455,7 @@ export const NotebookTreeItem = ({
                 onClick={() => onDeleteNotebook(node)}
               >
                 <Trash2 className="h-4 w-4" />
-                {t("notebookTree.deleteNotebook")}
+                {deleteLabel}
               </ContextMenuItem>
             </>
           )}
@@ -480,6 +490,7 @@ export const NotebookTreeItem = ({
               sharedNotebookIds={sharedNotebookIds}
               inheritedPublic={publicNotebook}
               showDescendantNotes={showDescendantNotes}
+              artifactFolder={artifactFolder}
             />
           ))}
         </m.div>
