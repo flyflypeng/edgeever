@@ -771,10 +771,14 @@ const jaStrings = flattenStrings(ja);
 const plStrings = flattenStrings(pl);
 const ruStrings = flattenStrings(ru);
 
+// A template whose only fixed text is punctuation, such as "{{name}}：{{reason}}",
+// would match unrelated text and rewrite it, so it is never used as a pattern.
+const hasFixedChineseText = (source: string) => /[\u3400-\u9fff]/.test(source.replace(/\{\{\w+\}\}/g, ""));
+
 const buildTranslationPairs = (targets: Map<string, string>) =>
   Array.from(zhStrings.entries()).flatMap(([key, source]) => {
     const target = targets.get(key);
-    if (!target || source === target) {
+    if (!target || source === target || !hasFixedChineseText(source)) {
       return [];
     }
     return [createTranslationPair(source, target)];

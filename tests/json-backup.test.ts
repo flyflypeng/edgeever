@@ -121,7 +121,11 @@ describe("EdgeEver ZIP", () => {
     const resourceChunks: number[] = [];
     const blob = await createEdgeEverZip(
       {
-        listNotebooks: async () => ({ notebooks: [notebook("nb_child", "Child", "nb_root"), notebook("nb_root", "Root")] }),
+        listNotebooks: async () => ({ notebooks: [
+          notebook("nb_child", "Child", "nb_root"),
+          notebook("nb_root", "Root"),
+          { ...notebook("nb_library", "Agent Artifacts"), systemKind: "artifact_library" },
+        ] }),
         listPrompts: async () => ({ prompts: [prompt] }),
         getPage: async () => ({
           memos: [memo],
@@ -158,13 +162,17 @@ describe("EdgeEver ZIP", () => {
 
     expect(backup.manifest.format).toBe("edgeever-zip");
     expect(backup.manifest.formatVersion).toBe(2);
-    expect(backup.manifest.counts).toEqual({ notebooks: 2, memos: 1, revisions: 1, resources: 1, prompts: 1 });
+    expect(backup.manifest.counts).toEqual({ notebooks: 3, memos: 1, revisions: 1, resources: 1, prompts: 1 });
     expect(backup.notebooks.find((item) => item.id === "nb_child")).toMatchObject({
       color: "#2563eb", textColor: "#123456", colorTarget: "both",
       isBold: true, iconInverted: true, rowInverted: true,
     });
     expect(backup.prompts).toEqual([prompt]);
-    expect(backup.notebooks.map((item) => item.id)).toEqual(["nb_root", "nb_child"]);
+    expect(backup.notebooks.map((item) => [item.id, item.systemKind])).toEqual([
+      ["nb_root", null],
+      ["nb_library", "artifact_library"],
+      ["nb_child", null],
+    ]);
     expect(backup.memos[0].memo.contentMarkdown).toBe(memo.contentMarkdown);
     expect(backup.archive).toBe(blob);
     expect(resourceChunks).toEqual([1, 2]);

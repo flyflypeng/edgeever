@@ -91,6 +91,7 @@ const toBackupNotebook = (notebook: Notebook): JsonBackupNotebook => ({
   iconInverted: notebook.iconInverted ?? false, rowInverted: notebook.rowInverted ?? false,
   sortOrder: notebook.sortOrder,
   createdAt: notebook.createdAt, updatedAt: notebook.updatedAt,
+  systemKind: notebook.systemKind ?? null,
 });
 
 export const createEdgeEverZipStream = async (

@@ -4,17 +4,29 @@ import {
   docToMarkdown,
   docToText,
   emptyDoc,
+  hasArtifactDocumentMarker,
   normalizeTags,
   type JsonBackupMemo,
   type JsonBackupNotebook,
   type TiptapDoc,
 } from "@edgeever/shared";
+import type { AuditActor } from "./api-context";
 import { AppError } from "./app-error";
 import { audit } from "./audit";
 import { createId } from "./entity-utils";
 import { sha256 } from "./hash-utils";
 import { upsertMemoSearchDocumentStatement } from "./memo-search-index";
+import {
+  ARTIFACT_LIBRARY_SYSTEM_KIND,
+  ensureArtifactLibrary,
+  findArtifactLibrary,
+  findArtifactLibraryAncestorId,
+  inboxNotebookIdentitySql,
+  workspaceInboxId,
+} from "./notebook-service";
 import type { DatabaseAdapter } from "./storage-contract";
+
+const RESTORE_ACTOR: AuditActor = { actorType: "user", actorId: null };
 
 const parseBackupDoc = (value: unknown): TiptapDoc => {
   try {
@@ -74,10 +86,22 @@ export const restoreJsonNotebooks = async (
     .filter((id): id is string => Boolean(id) && !importedIds.has(id as string));
   await assertNotebookIdsInWorkspace(db, workspaceId, externalParentIds);
 
-  await db.batch(notebooks.map((notebook) => db.prepare(
+  // A workspace has one Artifact Library. A backup's library becomes a folder
+  // of the library the workspace already has, so its artifacts stay inside it.
+  let libraryId = (await findArtifactLibrary(db, workspaceId))?.id ?? null;
+  const rows = notebooks.map((notebook) => {
+    if (notebook.systemKind !== ARTIFACT_LIBRARY_SYSTEM_KIND) return notebook;
+    if (!libraryId || libraryId === notebook.id) {
+      libraryId = notebook.id;
+      return { ...notebook, parentId: null };
+    }
+    return { ...notebook, parentId: libraryId, systemKind: null };
+  });
+
+  await db.batch(rows.map((notebook) => db.prepare(
     `INSERT INTO notebooks (
-      id, workspace_id, parent_id, name, slug, icon, color, text_color, color_target, is_bold, icon_inverted, row_inverted, sort_order, is_deleted, created_at, updated_at, deleted_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, NULL)
+      id, workspace_id, parent_id, name, slug, icon, color, text_color, color_target, is_bold, icon_inverted, row_inverted, sort_order, is_deleted, created_at, updated_at, deleted_at, system_kind
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, NULL, ?)
     ON CONFLICT(id) DO UPDATE SET
       parent_id = excluded.parent_id,
       name = excluded.name,
@@ -92,7 +116,8 @@ export const restoreJsonNotebooks = async (
       sort_order = excluded.sort_order,
       is_deleted = 0,
       updated_at = excluded.updated_at,
-      deleted_at = NULL`,
+      deleted_at = NULL,
+      system_kind = CASE WHEN ? THEN notebooks.system_kind ELSE excluded.system_kind END`,
   ).bind(
     notebook.id,
     workspaceId,
@@ -109,7 +134,37 @@ export const restoreJsonNotebooks = async (
     notebook.sortOrder,
     notebook.createdAt,
     notebook.updatedAt,
+    notebook.systemKind ?? null,
+    // Backups written before notebooks carried systemKind keep the identity
+    // the notebook already has here.
+    notebook.systemKind === undefined ? 1 : 0,
   )));
+};
+
+/**
+ * Where a restored memo goes: its own notebook when that is on the memo's side
+ * of the library boundary, otherwise the library root for an artifact and the
+ * inbox for an ordinary note (the same rule as restoring from the trash).
+ */
+const createRestoreLocator = (db: DatabaseAdapter, workspaceId: string) => {
+  const inLibrary = new Map<string, boolean>();
+  return async (notebookId: string, isArtifact: boolean) => {
+    if (!inLibrary.has(notebookId)) {
+      inLibrary.set(notebookId, Boolean(await findArtifactLibraryAncestorId(db, workspaceId, notebookId)));
+    }
+    if (inLibrary.get(notebookId) === isArtifact) return notebookId;
+    if (isArtifact) return (await ensureArtifactLibrary(db, workspaceId, null, RESTORE_ACTOR)).id;
+    const inbox = await db.prepare(
+      `SELECT n.id FROM notebooks n
+       WHERE n.workspace_id = ? AND n.is_deleted = 0 AND ${inboxNotebookIdentitySql("n")}
+       ORDER BY CASE WHEN n.id = ? THEN 0 WHEN n.id = 'nb_inbox' THEN 1 ELSE 2 END
+       LIMIT 1`,
+    ).bind(workspaceId, workspaceInboxId(workspaceId)).first<{ id: string }>();
+    if (!inbox) {
+      throw new AppError("restore_notebook_missing", "A note in the backup belongs outside the Artifact Library and the default inbox is unavailable.", 409);
+    }
+    return inbox.id;
+  };
 };
 
 export const restoreJsonMemos = async (
@@ -143,11 +198,15 @@ export const restoreJsonMemos = async (
     if (existing.results.some((row) => revisionOwners.get(row.id) !== row.memo_id)) throw revisionConflict();
   }
 
+  const locate = createRestoreLocator(db, workspaceId);
   for (const backup of backups) {
     const memo = backup.memo;
     const contentJson = parseBackupDoc(memo.contentJson);
     const contentMarkdown = memo.contentMarkdown || docToMarkdown(contentJson);
-    const contentText = docToText(contentJson);
+    const isArtifact = hasArtifactDocumentMarker(contentMarkdown);
+    const notebookId = await locate(memo.notebookId, isArtifact);
+    // An artifact's body is only its fallback text; search uses the page text.
+    const contentText = isArtifact ? memo.contentText : docToText(contentJson);
     const contentHash = await sha256(contentMarkdown + JSON.stringify(contentJson));
     const title = normalizeMemoTitle(memo.title);
     const tags = normalizeTags(memo.tags);
@@ -176,7 +235,7 @@ export const restoreJsonMemos = async (
       ).bind(
         memo.id,
         workspaceId,
-        memo.notebookId,
+        notebookId,
         title,
         createExcerpt(contentText),
         JSON.stringify(tags),

@@ -78,7 +78,9 @@ describe("NotebookPane sidebar collapse", () => {
   test("renders an icon rail of primary destinations while the notebook tree is collapsed", () => {
     const rail = source.split('data-notebook-sidebar-rail')[1]?.split(") : (")[0];
 
-    expect(rail).toContain('aria-label={t("notebookPane.newMemo")}');
+    // The primary button creates a note, or imports HTML inside the Artifact Library.
+    expect(source).toContain('const primaryCreateLabel = artifactsActive ? t("htmlArtifact.importPrimary") : t("notebookPane.newMemo");');
+    expect(rail).toContain("aria-label={primaryCreateLabel}");
     expect(rail).toContain("<LayoutGrid");
     expect(rail).toContain('label={t("notebookPane.allMemos")}');
     expect(rail).toContain('label={t("notebookPane.notebooks")}');

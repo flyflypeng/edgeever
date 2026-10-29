@@ -89,6 +89,8 @@ export const JsonBackupNotebookSchema = z.object({
   sortOrder: z.number().int(),
   createdAt: DateTimeSchema,
   updatedAt: DateTimeSchema,
+  // Absent in backups written before the Artifact Library existed.
+  systemKind: z.literal("artifact_library").nullable().optional(),
 });
 
 const JsonBackupRevisionSchema = z.object({
