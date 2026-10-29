@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, test } from "bun:test";
-import { createPosterDocument, serializePosterDocument, createDefaultDiagramDocument, createDefaultTableDocument, diagramFallbackMarkdown, serializeDiagramDocument, serializeInfographicDocument, serializeTableDocument, tableFallbackMarkdown } from "@edgeever/shared";
-import { hasMobilePoster, getMobileVisualDiagramKind, hasMobileInfographic, hasMobileStructuredTable, hasMobileVisualDiagram, resolveMobileMemoViewerContent } from "./mobile-diagram";
+import { createPosterDocument, serializeArtifactDocument, serializePosterDocument, createDefaultDiagramDocument, createDefaultTableDocument, diagramFallbackMarkdown, serializeDiagramDocument, serializeInfographicDocument, serializeTableDocument, tableFallbackMarkdown } from "@edgeever/shared";
+import { hasMobileArtifact, hasMobilePoster, getMobileVisualDiagramKind, hasMobileInfographic, hasMobileStructuredTable, hasMobileVisualDiagram, resolveMobileMemoViewerContent } from "./mobile-diagram";
 
 const hasMermaidCodeBlock = (doc: { content?: Array<{ type?: string; attrs?: { language?: string } }> }) =>
   Boolean(doc.content?.some((node) => node.type === "codeBlock" && node.attrs?.language === "mermaid"));
@@ -54,6 +54,32 @@ describe("mobile visual diagram viewer", () => {
     expect(JSON.stringify(doc)).toContain("res_preview/blob");
     expect(JSON.stringify(doc)).not.toContain("edgeever-poster-v1");
     expect(hasMobilePoster("text\n<!-- edgeever-poster-v1:broken -->")).toBe(true);
+  });
+
+  test("shows an HTML artifact as its thumbnail and excerpt, never the page or its envelope", () => {
+    const markdown = serializeArtifactDocument({
+      schemaVersion: 1,
+      kind: "html",
+      htmlResourceId: "res_html",
+      originalFilename: "dashboard.html",
+      byteSize: 2048,
+      sha256: "a".repeat(64),
+      thumbnailResourceId: "res_thumb",
+      thumbnailSha256: "a".repeat(64),
+      source: { type: "upload" },
+    }, "Quarterly revenue dashboard");
+    expect(hasMobileArtifact(markdown)).toBe(true);
+    const viewerContent = JSON.stringify(resolveMobileMemoViewerContent({ type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: "stale" }] }] }, markdown));
+    expect(viewerContent).toContain("res_thumb/blob");
+    expect(viewerContent).toContain("Quarterly revenue dashboard");
+    expect(viewerContent).not.toContain("edgeever-artifact-v1");
+    expect(viewerContent).not.toContain("res_html");
+    expect(viewerContent).not.toContain("stale");
+
+    const broken = "Fallback text\n\n<!-- edgeever-artifact-v1:not-json -->";
+    expect(hasMobileArtifact(broken)).toBe(true);
+    expect(JSON.stringify(resolveMobileMemoViewerContent(null, broken))).not.toContain("edgeever-artifact-v1");
+    expect(hasMobileArtifact("An ordinary note")).toBe(false);
   });
 
   test("shows infographic syntax without exposing its marker to the native viewer", () => {

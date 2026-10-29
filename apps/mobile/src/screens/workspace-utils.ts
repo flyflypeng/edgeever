@@ -1,4 +1,4 @@
-import { DEFAULT_MEMO_TITLE, type MemoSummary, type Notebook } from "@edgeever/shared";
+import { DEFAULT_MEMO_TITLE, getArtifactLibraryTreeIds, type MemoSummary, type Notebook } from "@edgeever/shared";
 import { resolveSupportedLocale } from "@edgeever/shared/i18n/locales";
 import type { MobileLocalePreference } from "../lib/preferences";
 
@@ -45,6 +45,12 @@ export const flattenNotebooks = (notebooks: Notebook[]) => {
 
   walk(null, 0);
   return result;
+};
+
+/** The Artifact Library subtree or the ordinary notebook tree; memos never cross between them. */
+export const filterNotebooksByTree = (notebooks: Notebook[], tree: "notes" | "artifacts") => {
+  const artifactTreeIds = getArtifactLibraryTreeIds(notebooks);
+  return notebooks.filter((notebook) => artifactTreeIds.has(notebook.id) === (tree === "artifacts"));
 };
 
 export const filterNotebookOptions = (options: NotebookOption[], searchText: string) => {

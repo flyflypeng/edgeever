@@ -42,6 +42,10 @@ export type ArtifactSummary = {
 export const hasArtifactDocumentMarker = (markdown: string | null | undefined) =>
   Boolean(markdown?.includes(`<!-- ${MARKER}:`));
 
+/** The fallback body alone, for clients that show it instead of the page. */
+export const stripArtifactDocumentMarker = (markdown: string) =>
+  markdown.replace(/<!--\s*edgeever-artifact-v1:[\s\S]*?-->/g, "").trim();
+
 export const parseArtifactDocument = (markdown: string | null | undefined): ArtifactDocument | null => {
   const encoded = markdown?.match(ENVELOPE)?.[1];
   if (!encoded || encoded.length > 100_000) return null;
