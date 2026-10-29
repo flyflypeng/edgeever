@@ -64,7 +64,7 @@ const installation = () => {
   );
   const resourcesOf = async (memoId) =>
     (await request("GET", "/api/v1/resources")).body.resources.filter((resource) => resource.memoId === memoId);
-  return { request, send, importArtifact, ensureLibrary, inboxId, saveBody, callTool, resourcesOf };
+  return { sqlite, request, send, importArtifact, ensureLibrary, inboxId, saveBody, callTool, resourcesOf };
 };
 
 const htmlFile = (html, name = "report.html", type = "text/html") => new File([html], name, { type });
@@ -194,5 +194,48 @@ describe("artifact content and location rules", () => {
 
     expect((await env.request("GET", `/api/v1/memos/${note.id}`)).body.memo.notebookId).toBe(inboxId);
     expect((await env.request("GET", `/api/v1/memos/${artifact.id}`)).body.memo.notebookId).toBe(library.id);
+  });
+});
+
+describe("artifacts are never shared publicly", () => {
+  const unsupported = { status: 400, body: { error: { code: "artifact_share_unsupported" } } };
+
+  test("an artifact, the Artifact Library and its folders cannot be shared", async () => {
+    const env = installation();
+    const library = await env.ensureLibrary();
+    const folder = (await env.request("POST", "/api/v1/notebooks", { name: "Reports", parentId: library.id })).body.notebook;
+    const artifact = (await env.importArtifact(htmlFile("<p>page</p>"))).body.memo;
+
+    expect(await env.request("POST", `/api/v1/memos/${artifact.id}/share`)).toMatchObject(unsupported);
+    expect(await env.request("POST", `/api/v1/notebooks/${library.id}/share`)).toMatchObject(unsupported);
+    expect(await env.request("POST", `/api/v1/notebooks/${folder.id}/share`)).toMatchObject(unsupported);
+    expect((await env.request("GET", "/api/v1/memo-shares")).body.shares).toEqual([]);
+    expect((await env.request("GET", "/api/v1/notebook-shares")).body.shares).toEqual([]);
+  });
+
+  test("notebook shares and public sites never list, search or tag-filter artifacts", async () => {
+    const env = installation();
+    const library = await env.ensureLibrary();
+    const inboxId = await env.inboxId();
+    await env.request("POST", "/api/v1/memos", { notebookId: inboxId, title: "Shared note", contentMarkdown: "quarterly revenue", tags: ["report"] });
+    const artifact = (await env.importArtifact(htmlFile("<title>Quarterly revenue</title><p>quarterly revenue</p>"), { tags: JSON.stringify(["report"]) })).body.memo;
+    // Neither the API nor sync lets these states arise, so plant them directly:
+    // an artifact outside the library and a share rooted at the library.
+    env.sqlite.prepare("UPDATE memos SET notebook_id = ? WHERE id = ?").run(inboxId, artifact.id);
+    const share = (await env.request("POST", `/api/v1/notebooks/${inboxId}/share`)).body.share;
+    env.sqlite.prepare("INSERT INTO notebook_shares (id, notebook_id, workspace_id, token, created_by, created_at, updated_at) SELECT 'nbshare_lib', id, workspace_id, ?, 'test', 'now', 'now' FROM notebooks WHERE id = ?")
+      .run("L".repeat(43), library.id);
+    const pub = (path, token = share.token) => env.request("GET", `/api/public/notebook-shares/${token}${path}`);
+    const titles = (memos) => memos.map((memo) => memo.title).filter((title) => title !== "欢迎来到 EdgeEver");
+
+    expect(titles((await pub("")).body.share.memos)).toEqual(["Shared note"]);
+    expect(titles((await pub("/search?q=quarterly")).body.memos)).toEqual(["Shared note"]);
+    expect(titles((await pub("/search?tag=report")).body.memos)).toEqual(["Shared note"]);
+    expect((await pub(`/memos/${artifact.id}`)).status).toBe(404);
+    expect((await pub(`/memos/${artifact.id}/preview`)).status).toBe(404);
+    expect(titles((await env.request("GET", `/api/v1/notebooks/${inboxId}/share/memos`)).body.memos)).toEqual(["Shared note"]);
+    expect(titles((await env.request("GET", `/api/v1/notebooks/${inboxId}/share/memos?q=quarterly`)).body.memos)).toEqual(["Shared note"]);
+    expect((await env.request("GET", `/api/v1/memos/${artifact.id}/notebook-sites`)).body).toMatchObject({ sites: [] });
+    expect((await pub("", "L".repeat(43))).status).toBe(404);
   });
 });

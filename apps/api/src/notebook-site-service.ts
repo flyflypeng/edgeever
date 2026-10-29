@@ -1,20 +1,26 @@
 import { readNotebookSiteSettings, type NotebookSiteSettings } from "@edgeever/shared";
 import type { DatabaseAdapter } from "./storage-contract";
 
+// Artifacts are never published: the tree stops at the Artifact Library and any
+// memo carrying the artifact envelope is dropped, whatever the share root is.
+export const notArtifactMemoSql = (alias: string) => `NOT EXISTS (
+    SELECT 1 FROM memo_contents ac WHERE ac.memo_id = ${alias}.id AND instr(ac.content_markdown, '<!-- edgeever-artifact-v1:') > 0
+  )`;
+
 // Every consumer starts at the live share. Deleted ancestors and inconsistent
 // workspace references stop recursion; exclusions are scoped to that share.
 export const publicTreeSql = `WITH RECURSIVE tree(id, workspace_id, share_id) AS (
   SELECT n.id, n.workspace_id, ns.id FROM notebook_shares ns
   JOIN notebooks n ON n.id = ns.notebook_id AND n.workspace_id = ns.workspace_id
-  WHERE ns.token = ? AND n.is_deleted = 0
+  WHERE ns.token = ? AND n.is_deleted = 0 AND n.system_kind IS NULL
   UNION
   SELECT n.id, n.workspace_id, t.share_id FROM notebooks n JOIN tree t ON n.parent_id = t.id
-  WHERE n.workspace_id = t.workspace_id AND n.is_deleted = 0
+  WHERE n.workspace_id = t.workspace_id AND n.is_deleted = 0 AND n.system_kind IS NULL
 ), visible_memos AS (
   SELECT m.* FROM memos m JOIN tree t ON m.notebook_id = t.id AND m.workspace_id = t.workspace_id
   WHERE m.is_deleted = 0 AND NOT EXISTS (
     SELECT 1 FROM notebook_share_excluded_memos e WHERE e.share_id = t.share_id AND e.memo_id = m.id
-  )
+  ) AND ${notArtifactMemoSql("m")}
 )`;
 
 export const getNotebookSite = async (db: DatabaseAdapter, token: string) => {
