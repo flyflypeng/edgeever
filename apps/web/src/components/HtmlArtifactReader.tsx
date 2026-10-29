@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { ArrowLeft, Download, FileUp, History, Maximize, RotateCcw, RotateCw, Trash2 } from "lucide-react";
+import { ArrowLeft, Download, FileUp, History, ImageDown, Maximize, RotateCcw, RotateCw, Trash2 } from "lucide-react";
 import { parseArtifactDocument, type MemoDetail } from "@edgeever/shared";
 import { Button } from "@/components/ui/button";
 import { IconTooltip } from "./editor/EditorPaneChrome";
@@ -10,6 +10,7 @@ import { MEMO_EDITOR_TOP_ROW_CLASS_NAME } from "./MemoEditorChromeDensity";
 import { ApiRequestError } from "@/lib/api";
 import { downloadBlob } from "@/lib/infographic-image-export";
 import { RevisionHistoryDialog } from "./dialogs/RevisionHistoryDialog";
+import { HtmlArtifactExportImageDialog } from "./HtmlArtifactExportImageDialog";
 import { connectArtifactBridge, createArtifactBridge, type ArtifactBridgeConnection } from "@/lib/html-artifact-bridge";
 import { HTML_ARTIFACT_SANDBOX } from "@/lib/html-artifact-sandbox";
 import type { EdgeEverRepository } from "@/lib/repository";
@@ -47,6 +48,7 @@ export default function HtmlArtifactReader({
   const [replaceError, setReplaceError] = useState<string | null>(null);
   const [replacing, setReplacing] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [exportOpen, setExportOpen] = useState(false);
   const replaceInputRef = useRef<HTMLInputElement>(null);
   const viewerRef = useRef<HTMLDivElement>(null);
   const savedTitleRef = useRef(memo.title ?? "");
@@ -214,6 +216,11 @@ export default function HtmlArtifactReader({
               <Maximize className="h-4 w-4" />
             </Button>
           </IconTooltip>
+          <IconTooltip label={t("htmlArtifact.exportImage")}>
+            <Button variant="ghost" size="icon" aria-label={t("htmlArtifact.exportImage")} disabled={loadState.status !== "ready"} onClick={() => setExportOpen(true)}>
+              <ImageDown className="h-4 w-4" />
+            </Button>
+          </IconTooltip>
           <IconTooltip label={t("htmlArtifact.download")}>
             <Button variant="ghost" size="icon" aria-label={t("htmlArtifact.download")} disabled={loadState.status !== "ready"} onClick={downloadHtml}>
               <Download className="h-4 w-4" />
@@ -283,6 +290,12 @@ export default function HtmlArtifactReader({
           </div>
         )}
       </div>
+      <HtmlArtifactExportImageDialog
+        open={exportOpen}
+        title={title}
+        getBridge={() => bridgeRef.current}
+        onOpenChange={setExportOpen}
+      />
       {historyOpen && (
         <RevisionHistoryDialog
           memo={memo}
