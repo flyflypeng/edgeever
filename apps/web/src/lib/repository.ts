@@ -100,6 +100,11 @@ export type EdgeEverRepository = {
   updateArtifactMetadata(memo: MemoDetail, input: { title?: string; tags?: string[] }): Promise<{ memo: MemoDetail }>;
   /** Replaces an artifact's page with a new HTML file as a new version on the server. Requires a connection. */
   replaceArtifactContent(memo: MemoDetail, file: File): Promise<{ memo: MemoDetail }>;
+  /**
+   * Stores a thumbnail rendered from the HTML whose hash is `sourceSha256`.
+   * Requires a connection; a stale hash fails with `artifact_thumbnail_stale`.
+   */
+  uploadArtifactThumbnail(memoId: string, image: Blob, sourceSha256: string): Promise<{ memo: MemoDetail }>;
   listMemos(params: LocalMemoListParams): Promise<LocalMemoListResponse>;
   /** Created-at and tags of live notes in exactly one notebook (or the whole workspace when omitted). */
   listMemoActivity(params: LocalMemoActivityParams): Promise<MemoActivityResponse>;
@@ -500,6 +505,13 @@ export const createWebRepository = (scope: string): EdgeEverRepository => {
   replaceArtifactContent: async (memo, file) => {
     if (isOffline()) throw new Error("artifact_replace_offline");
     const result = await api.replaceArtifactContent(memo.id, file, { expectedRevision: memo.revision });
+    await putLocalMemo(scope, result.memo);
+    return result;
+  },
+
+  uploadArtifactThumbnail: async (memoId, image, sourceSha256) => {
+    if (isOffline()) throw new Error("artifact_thumbnail_offline");
+    const result = await api.uploadArtifactThumbnail(memoId, image, sourceSha256);
     await putLocalMemo(scope, result.memo);
     return result;
   },

@@ -26,7 +26,18 @@ export const ArtifactDocumentSchema = z.object({
 });
 export type ArtifactDocument = z.infer<typeof ArtifactDocumentSchema>;
 
-export type ArtifactSummary = { kind: "html"; thumbnailResourceId?: string; thumbnailStale: boolean };
+/**
+ * What lists need to show an artifact card. `htmlResourceId` and `sha256`
+ * identify the current HTML, so clients can tell a replaced page from the one
+ * they already rendered a thumbnail for.
+ */
+export type ArtifactSummary = {
+  kind: "html";
+  htmlResourceId: string;
+  sha256: string;
+  thumbnailResourceId?: string;
+  thumbnailStale: boolean;
+};
 
 export const hasArtifactDocumentMarker = (markdown: string | null | undefined) =>
   Boolean(markdown?.includes(`<!-- ${MARKER}:`));
@@ -68,6 +79,8 @@ export const getArtifactSummary = (markdown: string | null | undefined): { artif
   return {
     artifact: {
       kind: document.kind,
+      htmlResourceId: document.htmlResourceId,
+      sha256: document.sha256,
       ...(document.thumbnailResourceId ? { thumbnailResourceId: document.thumbnailResourceId } : {}),
       thumbnailStale: !document.thumbnailResourceId || document.thumbnailSha256 !== document.sha256,
     },

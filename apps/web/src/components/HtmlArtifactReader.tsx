@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ArrowLeft, Download, FileUp, History, Maximize, RotateCcw, RotateCw, Trash2 } from "lucide-react";
 import { parseArtifactDocument, type MemoDetail } from "@edgeever/shared";
@@ -10,16 +10,10 @@ import { MEMO_EDITOR_TOP_ROW_CLASS_NAME } from "./MemoEditorChromeDensity";
 import { ApiRequestError } from "@/lib/api";
 import { downloadBlob } from "@/lib/infographic-image-export";
 import { RevisionHistoryDialog } from "./dialogs/RevisionHistoryDialog";
+import { connectArtifactBridge, createArtifactBridge, type ArtifactBridgeConnection } from "@/lib/html-artifact-bridge";
+import { HTML_ARTIFACT_SANDBOX } from "@/lib/html-artifact-sandbox";
 import type { EdgeEverRepository } from "@/lib/repository";
 import { parseTagsText } from "@/lib/utils";
-
-/**
- * The page runs as an opaque origin: scripts, forms, dialogs, popups and
- * downloads work, but it can never reach EdgeEver's cookies, storage or DOM,
- * and it cannot navigate the app. Do not add allow-same-origin or
- * allow-top-navigation*: either one breaks that isolation.
- */
-export const HTML_ARTIFACT_SANDBOX = "allow-scripts allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox allow-downloads";
 
 type LoadState = { status: "loading" } | { status: "ready"; html: string } | { status: "error" };
 
@@ -56,6 +50,26 @@ export default function HtmlArtifactReader({
   const replaceInputRef = useRef<HTMLInputElement>(null);
   const viewerRef = useRef<HTMLDivElement>(null);
   const savedTitleRef = useRef(memo.title ?? "");
+  const frameRef = useRef<HTMLIFrameElement>(null);
+  // The bridge of the page currently shown; screenshot features go through it.
+  const bridgeRef = useRef<ArtifactBridgeConnection | null>(null);
+  // Every load, reloads included, gets its own channel.
+  const framed = useMemo(
+    () => (loadState.status === "ready" ? { ...createArtifactBridge(loadState.html), load: reloadKey } : null),
+    [loadState, reloadKey],
+  );
+
+  // Listen before the frame loads so its first messages are not missed.
+  useLayoutEffect(() => {
+    const frame = frameRef.current;
+    if (!framed || !frame) return;
+    const bridge = connectArtifactBridge(frame, framed.channel);
+    bridgeRef.current = bridge;
+    return () => {
+      bridge.dispose();
+      if (bridgeRef.current === bridge) bridgeRef.current = null;
+    };
+  }, [framed]);
 
   useEffect(() => {
     setTitle(memo.title ?? "");
@@ -252,15 +266,16 @@ export default function HtmlArtifactReader({
         }}
       />
       <div ref={viewerRef} className="relative min-h-0 flex-1 bg-white" data-html-artifact-viewer>
-        {loadState.status === "ready" ? (
+        {framed ? (
           <iframe
-            key={reloadKey}
+            key={framed.channel}
+            ref={frameRef}
             className="h-full w-full border-0 bg-white"
             title={title || t("htmlArtifact.name")}
             sandbox={HTML_ARTIFACT_SANDBOX}
             allow="fullscreen"
             referrerPolicy="no-referrer"
-            srcDoc={loadState.html}
+            srcDoc={framed.srcDoc}
           />
         ) : (
           <div className="flex h-full items-center justify-center px-6 text-center text-sm text-slate-500" role={loadState.status === "error" ? "alert" : "status"}>

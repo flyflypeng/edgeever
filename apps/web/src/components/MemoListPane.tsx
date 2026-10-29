@@ -405,6 +405,7 @@ export const MemoListPane = ({
   onCreateMemo,
   onImportMarkdownFiles,
   onImportHtmlArtifactFiles,
+  onArtifactThumbnailNeeded,
   isSyncingMemos,
   canSyncMemos,
   mobileListActionsOpen,
@@ -485,6 +486,8 @@ export const MemoListPane = ({
   onImportMarkdownFiles: (files: File[]) => void;
   /** Imports dropped .html/.htm files as HTML artifacts. */
   onImportHtmlArtifactFiles: (files: File[]) => void;
+  /** An artifact card without an up-to-date thumbnail is on screen. */
+  onArtifactThumbnailNeeded?: (memo: MemoSummary) => void;
   isSyncingMemos: boolean;
   canSyncMemos: boolean;
   mobileListActionsOpen: boolean;
@@ -1326,7 +1329,8 @@ export const MemoListPane = ({
                   ))}
                 </DropdownMenuSubContent>
               </DropdownMenuSub>
-              <DropdownMenuSub>
+              {/* Artifact cards have a single layout, so the library offers no density choice. */}
+              {!inArtifactLibrary && <DropdownMenuSub>
                 <DropdownMenuSubTrigger className="text-xs">{listDensity === "compact" ? t("memoList.compactList") : t("memoList.previewList")}</DropdownMenuSubTrigger>
                 <DropdownMenuSubContent className="w-40 border border-slate-200 bg-card py-1 shadow-md">
                   <DropdownMenuItem
@@ -1344,7 +1348,7 @@ export const MemoListPane = ({
                     {t("memoList.compactList")}
                   </DropdownMenuItem>
                 </DropdownMenuSubContent>
-              </DropdownMenuSub>
+              </DropdownMenuSub>}
               <DropdownMenuItem
                 className="flex h-9 w-full items-center gap-2 px-3 text-left text-xs text-slate-700 hover:bg-slate-50 cursor-pointer outline-none"
                 disabled={!canSyncMemos || isSyncingMemos}
@@ -1515,6 +1519,7 @@ export const MemoListPane = ({
                       onOpenSelectionKeyboardContextMenu={() => handleOpenSelectionKeyboardContextMenu(memo)}
                       onOpenKeyboardContextMenu={(target) => handleOpenMemoKeyboardContextMenu(memo, target)}
                       onToggle={(event) => handleToggleMemo(memo.id, event)}
+                      onArtifactThumbnailNeeded={onArtifactThumbnailNeeded}
                     />
                   </div>
                 );
@@ -1774,7 +1779,7 @@ export const MemoListPane = ({
             canSelectMemos={canEnterSelectionMode}
             isSelectionMode={selectionMode}
             listDescription={listCountLabel}
-            listDensity={listDensity}
+            listDensity={inArtifactLibrary ? null : listDensity}
             listTitle={listTitle}
             sortMode={sortMode}
             view={view}

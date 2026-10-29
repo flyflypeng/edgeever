@@ -1781,6 +1781,18 @@ export const createEdgeEverClient = (options: EdgeEverClientOptions = {}) => {
       return request<MemoResponse>(`/api/v1/artifacts/${encodeURIComponent(memoId)}/content`, { method: "PUT", body: form });
     },
 
+    /**
+     * Stores a first-screen image of an artifact. `sourceSha256` is the HTML's
+     * hash the image was rendered from; the server answers 409
+     * `artifact_thumbnail_stale` when the page has changed since.
+     */
+    uploadArtifactThumbnail: (memoId: string, image: Blob, sourceSha256: string) => {
+      const form = new FormData();
+      form.append("image", image, `thumbnail.${image.type.split("/")[1] || "png"}`);
+      form.append("sourceSha256", sourceSha256);
+      return request<MemoResponse>(`/api/v1/artifacts/${encodeURIComponent(memoId)}/thumbnail`, { method: "PUT", body: form });
+    },
+
     duplicateMemo: (memoId: string, payload: { notebookId?: string; title?: string } = {}) =>
       request<MemoResponse>(`/api/v1/memos/${encodeURIComponent(memoId)}/duplicate`, {
         method: "POST",
