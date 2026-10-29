@@ -48,6 +48,7 @@ export const NotebookTreeItem = ({
   showDescendantNotes,
   sharedNotebookIds,
   inheritedPublic = false,
+  artifactFolder = false,
 }: {
   node: NotebookNode;
   depth: number;
@@ -67,6 +68,8 @@ export const NotebookTreeItem = ({
   showDescendantNotes: boolean;
   sharedNotebookIds?: ReadonlySet<string>;
   inheritedPublic?: boolean;
+  /** An Artifact Folder inside the Artifact Library: folder wording, no sharing. */
+  artifactFolder?: boolean;
 }) => {
   const { t } = useTranslation();
   const [shareOpen, setShareOpen] = useState(false);
@@ -78,6 +81,9 @@ export const NotebookTreeItem = ({
   const showsSplitCount = !showDescendantNotes && hasChildren;
   const selected = node.id === selectedNotebookId;
   const isInbox = node.slug === "inbox";
+  const TreeIcon = artifactFolder ? Folder : NotebookIcon;
+  const newChildLabel = t(artifactFolder ? "artifactLibrary.folder.newChild" : "notebookTree.newChild");
+  const deleteLabel = t(artifactFolder ? "artifactLibrary.folder.delete" : "notebookTree.deleteNotebook");
   const [dropPosition, setDropPosition] = useState<NotebookDropPosition | null>(null);
   const [actionsOpen, setActionsOpen] = useState(false);
   const actionsRef = useRef<HTMLDivElement>(null);
@@ -284,7 +290,7 @@ export const NotebookTreeItem = ({
                   }
                 }}
               >
-                <NotebookAppearanceContent notebook={node} selected={selected} />
+                <NotebookAppearanceContent notebook={artifactFolder && !node.icon ? { ...node, icon: "folder" } : node} selected={selected} />
                 {publicNotebook ? (
                   <Globe
                     className={cn("h-3.5 w-3.5 shrink-0", node.rowInverted ? "text-white/80" : selected ? "text-slate-700" : "text-slate-500")}
@@ -333,7 +339,7 @@ export const NotebookTreeItem = ({
                     }}
                   >
                     <Plus className="h-4 w-4" />
-                    {t("notebookTree.newChild")}
+                    {newChildLabel}
                   </button>
                   <button
                     className="flex h-9 w-full items-center gap-2 rounded-sm px-2 text-left text-xs outline-none hover:bg-slate-100"
@@ -351,13 +357,15 @@ export const NotebookTreeItem = ({
                     type="button" onClick={event => { event.stopPropagation(); setActionsOpen(false); onEditNotebookAppearance(node); }}>
                     <Palette className="h-4 w-4" />{t("notebookAppearance.title")}
                   </button>
-                  <button
-                    className="flex h-9 w-full items-center gap-2 rounded-sm px-2 text-left text-xs outline-none hover:bg-slate-100"
-                    type="button"
-                    onClick={event => { event.stopPropagation(); setActionsOpen(false); setShareOpen(true); }}
-                  >
-                    <Share2 className="h-4 w-4" />{shareActionLabel}
-                  </button>
+                  {artifactFolder ? null : (
+                    <button
+                      className="flex h-9 w-full items-center gap-2 rounded-sm px-2 text-left text-xs outline-none hover:bg-slate-100"
+                      type="button"
+                      onClick={event => { event.stopPropagation(); setActionsOpen(false); setShareOpen(true); }}
+                    >
+                      <Share2 className="h-4 w-4" />{shareActionLabel}
+                    </button>
+                  )}
                 {isInbox ? (
                   <>
                     <div className="-mx-1 my-1 h-px bg-slate-100" />
@@ -390,7 +398,7 @@ export const NotebookTreeItem = ({
                       }}
                     >
                       <Trash2 className="h-4 w-4" />
-                      {t("notebookTree.deleteNotebook")}
+                      {deleteLabel}
                     </button>
                   </>
                 )}
@@ -411,7 +419,7 @@ export const NotebookTreeItem = ({
             onClick={() => onCreateNotebook(node.id)}
           >
             <Plus className="h-4 w-4" />
-            {t("notebookTree.newChild")}
+            {newChildLabel}
           </ContextMenuItem>
           <ContextMenuItem
             className="flex h-9 items-center gap-2 px-3 text-xs text-slate-700 hover:bg-slate-50 cursor-pointer outline-none"
@@ -423,9 +431,11 @@ export const NotebookTreeItem = ({
           <ContextMenuItem className="flex h-9 items-center gap-2 px-3 text-xs cursor-pointer" onClick={() => onEditNotebookAppearance(node)}>
             <Palette className="h-4 w-4" />{t("notebookAppearance.title")}
           </ContextMenuItem>
-          <ContextMenuItem className="flex h-9 items-center gap-2 px-3 text-xs cursor-pointer" onClick={() => setShareOpen(true)}>
-            <Share2 className="h-4 w-4" />{shareActionLabel}
-          </ContextMenuItem>
+          {artifactFolder ? null : (
+            <ContextMenuItem className="flex h-9 items-center gap-2 px-3 text-xs cursor-pointer" onClick={() => setShareOpen(true)}>
+              <Share2 className="h-4 w-4" />{shareActionLabel}
+            </ContextMenuItem>
+          )}
           {isInbox ? (
             <>
               <ContextMenuSeparator className="my-1 h-px bg-slate-100" />
@@ -450,7 +460,7 @@ export const NotebookTreeItem = ({
                 onClick={() => onDeleteNotebook(node)}
               >
                 <Trash2 className="h-4 w-4" />
-                {t("notebookTree.deleteNotebook")}
+                {deleteLabel}
               </ContextMenuItem>
             </>
           )}
@@ -486,6 +496,7 @@ export const NotebookTreeItem = ({
               sharedNotebookIds={sharedNotebookIds}
               inheritedPublic={publicNotebook}
               showDescendantNotes={showDescendantNotes}
+              artifactFolder={artifactFolder}
             />
           ))}
         </m.div>

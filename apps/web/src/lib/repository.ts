@@ -1,7 +1,7 @@
 import type { NotebookUpdateInput } from "@edgeever/shared";
 import { assertLocalMemoSnapshot } from "./local-memo-guard";
 import { localizeDefaultMemoTemplate } from "@edgeever/shared/memo-template-seeds";
-import { markdownToDoc, type MemoDetail, type MemoRevision, type MemoTemplate, type Notebook, type Resource, type ResourceListItem, type ResourceStorageSummary, type TagSummary, type TiptapDoc } from "@edgeever/shared";
+import { findArtifactLibrary, markdownToDoc, type MemoDetail, type MemoRevision, type MemoTemplate, type Notebook, type Resource, type ResourceListItem, type ResourceStorageSummary, type TagSummary, type TiptapDoc } from "@edgeever/shared";
 import { api } from "@/lib/api";
 import {
   getLocalMemo,
@@ -60,6 +60,8 @@ export type EdgeEverRepository = {
   updateNotebook(notebookId: string, input: NotebookUpdateInput): Promise<{ notebook: Notebook }>;
   deleteNotebook(notebookId: string): Promise<{ ok: true }>;
   restoreNotebook(notebookId: string): Promise<{ notebook: Notebook }>;
+  /** Returns the Artifact Library, creating it on the server the first time. */
+  ensureArtifactLibrary(locale?: string): Promise<{ notebook: Notebook }>;
   listTemplates(): Promise<{ templates: MemoTemplate[] }>;
   createTemplate(input: { name: string; description?: string | null; memoId?: string; title?: string | null; contentMarkdown?: string; tags?: string[] }): Promise<{ template: MemoTemplate }>;
   updateTemplate(templateId: string, input: { name?: string; description?: string | null; title?: string | null; contentMarkdown?: string; tags?: string[] }): Promise<{ template: MemoTemplate }>;
@@ -256,6 +258,15 @@ export const createWebRepository = (scope: string): EdgeEverRepository => {
   restoreNotebook: async (notebookId) => {
     if (isOffline()) throw new Error("Notebook restore requires a connection");
     const result = await api.restoreNotebook(notebookId);
+    await putLocalNotebook(scope, result.notebook);
+    return result;
+  },
+
+  async ensureArtifactLibrary(locale) {
+    const local = findArtifactLibrary((await listLocalNotebooks(scope)).notebooks);
+    if (local) return { notebook: local };
+    if (isOffline()) throw new Error("Artifact Library creation requires a connection");
+    const result = await api.ensureArtifactLibrary(locale);
     await putLocalNotebook(scope, result.notebook);
     return result;
   },

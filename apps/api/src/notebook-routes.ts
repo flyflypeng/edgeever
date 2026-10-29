@@ -1,4 +1,4 @@
-import { NotebookCreateSchema, NotebookUpdateSchema } from "@edgeever/shared";
+import { ArtifactLibraryEnsureSchema, NotebookCreateSchema, NotebookUpdateSchema } from "@edgeever/shared";
 import { zValidator } from "@hono/zod-validator";
 import type { Hono } from "hono";
 import type { AppEnv, Bindings } from "./api-context";
@@ -7,6 +7,7 @@ import { apiError } from "./http-errors";
 import {
   createNotebookRecord,
   deleteNotebookRecord,
+  ensureArtifactLibrary,
   listNotebooks,
   restoreNotebookRecord,
   updateNotebookRecord,
@@ -92,5 +93,21 @@ export const registerNotebookRoutes = (
     } catch (error) {
       return respondWithAppError(c, error);
     }
+  });
+
+  // Idempotent: the first call creates the Artifact Library, later calls return it.
+  app.post("/api/v1/artifact-library", async (c) => {
+    const denied = requireScopes(c, "write:notebooks");
+    if (denied) return denied;
+
+    const body = ArtifactLibraryEnsureSchema.safeParse(await c.req.json().catch(() => ({})));
+    if (!body.success) return apiError(c, "invalid_params", "locale must be a short language tag", 400);
+    const notebook = await ensureArtifactLibrary(
+      c.env.storage.db,
+      getWorkspaceId(c),
+      body.data.locale ?? c.req.header("accept-language"),
+      getAuditActor(c),
+    );
+    return c.json({ notebook });
   });
 };

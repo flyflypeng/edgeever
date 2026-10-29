@@ -5,6 +5,9 @@ import type { TableSummaryPreview } from "./table";
 
 export type NoteCreateKind = DiagramKind | "infographic" | "table" | "poster";
 
+/** System root notebooks. The Artifact Library is the only kind today. */
+export type NotebookSystemKind = "artifact_library";
+
 export type Notebook = {
   id: string;
   parentId: string | null;
@@ -23,6 +26,8 @@ export type Notebook = {
   lastMemoUpdatedAt: string | null;
   createdAt: string;
   updatedAt: string;
+  /** Older servers omit it; ordinary notebooks and Artifact Folders are null. */
+  systemKind?: NotebookSystemKind | null;
 };
 
 export type MemoSummary = {

@@ -60,9 +60,10 @@ export type MemoSelectionContextMenuState = { x: number; y: number };
 export type NotebookContextMenuState = { notebook: NotebookNode; x: number; y: number };
 export type MemoDeleteConfirmation = { kind: "single" | "bulk"; memoIds: string[]; permanent: boolean };
 
+// `artifact` switches the wording to Artifact Folders / the Artifact Library.
 export type NotebookNameDialogState =
-  | { mode: "create"; parentId: string | null }
-  | { mode: "rename"; notebook: Notebook };
+  | { mode: "create"; parentId: string | null; artifact?: boolean }
+  | { mode: "rename"; notebook: Notebook; artifact?: boolean };
 
 export type AppNoticeDialogState = { title: string; description: string };
 
@@ -156,6 +157,7 @@ export const EDITOR_PHONE_PREVIEW_FOLLOW_STORAGE_KEY = "edgeever.editor.phonePre
 export const MEMO_LIST_DENSITY_STORAGE_KEY = "edgeever.memoListDensity";
 export const MEMO_LIST_WIDTH_STORAGE_KEY = "edgeever.memoListWidth";
 export const NOTEBOOK_SORT_STORAGE_KEY = "edgeever.notebookSort";
+export const ARTIFACT_FOLDER_SORT_STORAGE_KEY = "edgeever.artifactFolderSort";
 export const NOTEBOOK_TREE_COLLAPSED_IDS_STORAGE_KEY = "edgeever.notebookTreeCollapsedIds:v1";
 export const NOTEBOOK_SECTION_COLLAPSED_STORAGE_KEY = "edgeever.notebookSectionCollapsed";
 export const SHORTCUT_SETTINGS_STORAGE_KEY = "edgeever.shortcutSettings";
@@ -515,18 +517,18 @@ export const writeMemoListWidthPreference = (width: number) => {
   }
 };
 
-export const readNotebookSortPreference = (): NotebookSortMode => {
+export const readNotebookSortPreference = (storageKey = NOTEBOOK_SORT_STORAGE_KEY): NotebookSortMode => {
   try {
-    const sortMode = window.localStorage.getItem(NOTEBOOK_SORT_STORAGE_KEY);
+    const sortMode = window.localStorage.getItem(storageKey);
     return NOTEBOOK_SORT_VALUES.includes(sortMode as NotebookSortMode) ? (sortMode as NotebookSortMode) : "name-asc";
   } catch {
     return "name-asc";
   }
 };
 
-export const writeNotebookSortPreference = (sortMode: NotebookSortMode) => {
+export const writeNotebookSortPreference = (sortMode: NotebookSortMode, storageKey = NOTEBOOK_SORT_STORAGE_KEY) => {
   try {
-    window.localStorage.setItem(NOTEBOOK_SORT_STORAGE_KEY, sortMode);
+    window.localStorage.setItem(storageKey, sortMode);
   } catch {
     // Local storage can be unavailable in private or restricted browser contexts.
   }

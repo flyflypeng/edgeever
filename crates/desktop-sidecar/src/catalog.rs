@@ -5,13 +5,15 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::memo::memo_value;
 use crate::{enqueue_change, markdown_doc, now_id, string_param, tags_from_json};
 
+pub(crate) const ARTIFACT_LIBRARY_SYSTEM_KIND: &str = "artifact_library";
+
 pub(crate) fn is_inbox_notebook(id: &str, slug: Option<&str>) -> bool {
     slug == Some("inbox") || id == "nb_inbox" || id.ends_with("_inbox")
 }
 
 pub(crate) fn list_notebooks(database: &Connection) -> Result<Value, String> {
     let mut statement = database.prepare(
-        "SELECT n.id, n.parent_id, n.name, n.slug, n.icon, n.color, n.color_target, n.is_bold, n.icon_inverted, n.row_inverted, n.text_color, n.sort_order, n.created_at, n.updated_at,
+        "SELECT n.id, n.parent_id, n.name, n.slug, n.icon, n.color, n.color_target, n.is_bold, n.icon_inverted, n.row_inverted, n.text_color, n.sort_order, n.created_at, n.updated_at, n.system_kind,
                 COUNT(CASE WHEN m.is_deleted = 0 THEN 1 END) AS memo_count,
                 MAX(CASE WHEN m.is_deleted = 0 THEN m.updated_at END) AS last_memo_updated_at
            FROM notebooks n LEFT JOIN memos m ON m.notebook_id = n.id
@@ -29,6 +31,7 @@ pub(crate) fn list_notebooks(database: &Connection) -> Result<Value, String> {
         "sortOrder": row.get::<_, i64>("sort_order")?, "memoCount": row.get::<_, i64>("memo_count")?,
         "lastMemoUpdatedAt": row.get::<_, Option<String>>("last_memo_updated_at")?,
         "createdAt": row.get::<_, String>("created_at")?, "updatedAt": row.get::<_, String>("updated_at")?,
+        "systemKind": row.get::<_, Option<String>>("system_kind")?,
     }))).map_err(|e| e.to_string())?;
     let notebooks: Result<Vec<_>, _> = rows.collect();
     Ok(json!({ "notebooks": notebooks.map_err(|e| e.to_string())? }))
@@ -40,7 +43,7 @@ fn notebook_value(
     include_deleted: bool,
 ) -> Result<Value, String> {
     let mut statement = database.prepare(
-        "SELECT n.id, n.parent_id, n.name, n.slug, n.icon, n.color, n.color_target, n.is_bold, n.icon_inverted, n.row_inverted, n.text_color, n.sort_order, n.created_at, n.updated_at,
+        "SELECT n.id, n.parent_id, n.name, n.slug, n.icon, n.color, n.color_target, n.is_bold, n.icon_inverted, n.row_inverted, n.text_color, n.sort_order, n.created_at, n.updated_at, n.system_kind,
                 COUNT(CASE WHEN m.is_deleted = 0 THEN 1 END) AS memo_count,
                 MAX(CASE WHEN m.is_deleted = 0 THEN m.updated_at END) AS last_memo_updated_at
            FROM notebooks n LEFT JOIN memos m ON m.notebook_id = n.id
@@ -58,6 +61,7 @@ fn notebook_value(
         "sortOrder": row.get::<_, i64>("sort_order")?, "memoCount": row.get::<_, i64>("memo_count")?,
         "lastMemoUpdatedAt": row.get::<_, Option<String>>("last_memo_updated_at")?,
         "createdAt": row.get::<_, String>("created_at")?, "updatedAt": row.get::<_, String>("updated_at")?,
+        "systemKind": row.get::<_, Option<String>>("system_kind")?,
     }))).map_err(|e| e.to_string())
 }
 
@@ -173,6 +177,7 @@ pub(crate) fn update_notebook(database: &Connection, params: &Value) -> Result<V
 struct ActiveNotebook {
     id: String,
     slug: Option<String>,
+    system_kind: Option<String>,
 }
 
 fn active_notebook_tree(
@@ -189,7 +194,7 @@ fn active_notebook_tree(
                INNER JOIN tree ON n.parent_id = tree.id
                WHERE n.is_deleted = 0
              )
-             SELECT n.id, n.slug
+             SELECT n.id, n.slug, n.system_kind
              FROM tree
              INNER JOIN notebooks n ON n.id = tree.id
              WHERE n.is_deleted = 0
@@ -201,6 +206,7 @@ fn active_notebook_tree(
             Ok(ActiveNotebook {
                 id: row.get(0)?,
                 slug: row.get(1)?,
+                system_kind: row.get(2)?,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -244,6 +250,12 @@ pub(crate) fn delete_notebook(database: &Connection, params: &Value) -> Result<V
         .any(|notebook| is_inbox_notebook(&notebook.id, notebook.slug.as_deref()))
     {
         return Err("inbox_not_deletable".to_owned());
+    }
+    if tree
+        .iter()
+        .any(|notebook| notebook.system_kind.as_deref() == Some(ARTIFACT_LIBRARY_SYSTEM_KIND))
+    {
+        return Err("artifact_library_protected".to_owned());
     }
 
     let memo_count: i64 = database
