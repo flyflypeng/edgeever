@@ -1,4 +1,5 @@
 import {
+  hasArtifactDocumentMarker,
   hasInfographicDocumentMarker,
   hasPosterDocumentMarker,
   hasTableDocumentMarker,
@@ -20,19 +21,25 @@ export type EnvelopeContentGuard = {
   save?: {
     /** The stored body belongs to this type. */
     protects: (markdown: Markdown) => boolean;
-    /** The new body may replace a protected one. */
-    accepts: (markdown: Markdown) => boolean;
+    /**
+     * The new body may replace a protected one. `hasDocumentUpdate` is true when
+     * the request carries `contentMarkdown` or `contentJson`, even unchanged ones.
+     */
+    accepts: (markdown: Markdown, hasDocumentUpdate: boolean) => boolean;
     rejected: SaveRejection;
     /** Rejects a new body that carries this type's marker but does not parse, whatever the stored body is. */
     invalid?: SaveRejection & { hasMarker: (markdown: Markdown) => boolean };
   };
-  /** MCP `update_memo` with `contentMarkdown`; rejected with status 400. */
+  /** MCP `update_memo` with `contentMarkdown`; rejected with `status`, 400 by default. */
   updateMemo?: {
     protects: (markdown: Markdown) => boolean;
     code: string;
     message: string;
+    status?: number;
   };
 };
+
+const ARTIFACT_UPDATE_MESSAGE = "Artifact content can only be replaced through the artifact endpoints.";
 
 // Order is the order checks run in when one body matches several entries.
 export const ENVELOPE_CONTENT_GUARDS: EnvelopeContentGuard[] = [
@@ -75,13 +82,34 @@ export const ENVELOPE_CONTENT_GUARDS: EnvelopeContentGuard[] = [
       message: "Infographic content cannot be replaced through update_memo.",
     },
   },
+  // Artifacts are read-only: their body is only replaced through the artifact
+  // endpoints, so any ordinary body update is refused, even an identical one.
+  // Title, tags, pin and moves inside the Artifact Library still save.
+  {
+    save: {
+      protects: hasArtifactDocumentMarker,
+      accepts: (_markdown, hasDocumentUpdate) => !hasDocumentUpdate,
+      rejected: { error: "artifact_update_required", message: ARTIFACT_UPDATE_MESSAGE, status: 409 },
+      invalid: { hasMarker: hasArtifactDocumentMarker, error: "artifact_update_required", message: ARTIFACT_UPDATE_MESSAGE, status: 409 },
+    },
+    updateMemo: {
+      protects: hasArtifactDocumentMarker,
+      code: "artifact_update_required",
+      message: ARTIFACT_UPDATE_MESSAGE,
+      status: 409,
+    },
+  },
 ];
 
-export const findSaveContentRejection = (currentMarkdown: string, nextMarkdown: string): SaveRejection | null => {
+export const findSaveContentRejection = (
+  currentMarkdown: string,
+  nextMarkdown: string,
+  hasDocumentUpdate: boolean,
+): SaveRejection | null => {
   for (const { save } of ENVELOPE_CONTENT_GUARDS) {
     if (!save) continue;
-    if (save.protects(currentMarkdown) && !save.accepts(nextMarkdown)) return save.rejected;
-    if (save.invalid?.hasMarker(nextMarkdown) && !save.accepts(nextMarkdown)) {
+    if (save.protects(currentMarkdown) && !save.accepts(nextMarkdown, hasDocumentUpdate)) return save.rejected;
+    if (save.invalid?.hasMarker(nextMarkdown) && !save.accepts(nextMarkdown, hasDocumentUpdate)) {
       const { error, message, status } = save.invalid;
       return { error, message, status };
     }

@@ -4,6 +4,7 @@ import {
   docToMarkdown,
   docToText,
   emptyDoc,
+  hasArtifactDocumentMarker,
   markdownToDoc,
   mergeMemoDocs,
   resolveMemoContentDoc,
@@ -26,7 +27,7 @@ import type { AppContext, AuditActor, AuthContext, Bindings } from "./api-contex
 import { AppError } from "./app-error";
 import { clampNumber, createId, isoNow, parseJsonArray } from "./entity-utils";
 import { findSaveContentRejection } from "./envelope-content-guards";
-import { workspaceInboxId } from "./notebook-service";
+import { assertMemoLocation, isMemoLocationAllowed, MEMO_LOCATION_INVALID, workspaceInboxId } from "./notebook-service";
 import { sha256 } from "./hash-utils";
 import { getRequiredString } from "./mcp-json-rpc";
 import {
@@ -750,16 +751,19 @@ export const moveMemosToNotebook = async (
   const placeholders = uniqueMemoIds.map(() => "?").join(", ");
   const rows = await db
     .prepare(
-      `SELECT id, notebook_id, tags_json
-       FROM memos
-       WHERE workspace_id = ? AND is_deleted = 0 AND id IN (${placeholders})`
+      `SELECT m.id, m.notebook_id, m.tags_json, c.content_markdown
+       FROM memos m
+       INNER JOIN memo_contents c ON c.memo_id = m.id
+       WHERE m.workspace_id = ? AND m.is_deleted = 0 AND m.id IN (${placeholders})`
     )
     .bind(workspaceId, ...uniqueMemoIds)
-    .all<{ id: string; notebook_id: string; tags_json: string }>();
+    .all<{ id: string; notebook_id: string; tags_json: string; content_markdown: string }>();
 
   if (rows.results.length !== uniqueMemoIds.length) {
     throw new AppError("missing_memos", "One or more memos cannot be moved.", 400);
   }
+  const artifactStates = new Set(rows.results.map((row) => hasArtifactDocumentMarker(row.content_markdown)));
+  for (const isArtifact of artifactStates) await assertMemoLocation(db, workspaceId, notebookId, isArtifact);
 
   const now = isoNow();
   const statements: PreparedStatementAdapter[] = [
@@ -868,6 +872,12 @@ export const mergeMemosRecord = async (
     .map((memoId) => rows.results.find((row) => row.id === memoId))
     .filter((row): row is MemoDetailRow => Boolean(row));
   const notebookId = input.notebookId ?? ordered[0].notebook_id;
+  // A merge always produces an ordinary note, so it can neither consume an
+  // artifact nor land inside the Artifact Library.
+  if (ordered.some((row) => hasArtifactDocumentMarker(row.content_markdown))) {
+    throw new AppError(MEMO_LOCATION_INVALID.error, "Artifacts cannot be merged into notes.", MEMO_LOCATION_INVALID.status);
+  }
+  await assertMemoLocation(db, workspaceId, notebookId, false);
   const title = resolveMergedMemoTitle(input.title, ordered);
   const sourceDocs = ordered.map((memo) => {
     const contentJson = parseDoc(memo.content_json);
@@ -953,7 +963,11 @@ export const mergeMemosRecord = async (
 export const createMemoRecord = async (
   db: DatabaseAdapter,
   workspaceId: string,
-  input: { notebookId: string; title?: string; contentJson?: unknown; contentMarkdown?: string; tags?: string[]; createdAt?: string; updatedAt?: string },
+  input: {
+    notebookId: string; title?: string; contentJson?: unknown; contentMarkdown?: string; tags?: string[]; createdAt?: string; updatedAt?: string;
+    /** Only the artifact service sets these: artifacts index text extracted from their HTML. */
+    artifact?: { contentText: string };
+  },
   actor: { actorType: "user" | "agent"; actorId: string | null },
   actorLabel: string
 ): Promise<MemoDetail> => {
@@ -963,12 +977,13 @@ export const createMemoRecord = async (
   if (!(await getNotebook(db, workspaceId, input.notebookId))) {
     throw new AppError("not_found", "Notebook not found", 404);
   }
+  await assertMemoLocation(db, workspaceId, input.notebookId, Boolean(input.artifact));
   const tags = normalizeTags(input.tags);
   const contentMarkdown = input.contentMarkdown ?? "";
   const contentJson = input.contentJson && typeof input.contentJson === "object"
     ? input.contentJson as TiptapDoc
     : markdownToDoc(contentMarkdown);
-  const contentText = docToText(contentJson);
+  const contentText = input.artifact?.contentText ?? docToText(contentJson);
   const title = normalizeMemoTitle(input.title);
   const excerpt = createExcerpt(contentText);
   const contentHash = await sha256(contentMarkdown + JSON.stringify(contentJson));
@@ -1357,8 +1372,14 @@ export const updateMemoRecord = async (
   const tags = input.tags === undefined ? parseJsonArray(current.tags_json) : normalizeTags(input.tags);
   const excerpt = createExcerpt(contentText);
   const notebookId = input.notebookId ?? current.notebook_id;
-  const contentRejection = findSaveContentRejection(current.content_markdown, contentMarkdown);
+  const contentRejection = findSaveContentRejection(current.content_markdown, contentMarkdown, hasDocumentUpdate);
   if (contentRejection) return contentRejection;
+  if (
+    notebookId !== current.notebook_id
+    && !(await isMemoLocationAllowed(db, workspaceId, notebookId, hasArtifactDocumentMarker(current.content_markdown)))
+  ) {
+    return { ...MEMO_LOCATION_INVALID };
+  }
   const currentTable = parseTableDocument(current.content_markdown);
   const nextTable = parseTableDocument(contentMarkdown);
   const removedAttachmentIds = currentTable && nextTable

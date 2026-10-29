@@ -48,7 +48,7 @@ import {
 } from "@/lib/mobile-editor";
 import { cn } from "@/lib/utils";
 import { isBrowserOffline, isBrowserOnline } from "@/lib/network-status";
-import { createDefaultDiagramDocument, createDefaultInfographicDocument, hasPosterDocumentMarker, posterFallbackMarkdown, serializePosterDocument, createDefaultTableDocument, diagramFallbackMarkdown, getArtifactLibraryTreeIds, getNotebookScopeIds, hasTableDocumentMarker, infographicFallbackMarkdown, markdownToDoc, parseDiagramDocument, parseInfographicDocument, parseTableDocument, serializeDiagramDocument, serializeInfographicDocument, serializeTableDocument, tableFallbackMarkdown, type NoteCreateKind, type Notebook, type AuthUser, type MemoSummary, type MemoDetail, type MemoTemplate as SavedMemoTemplate, getMemoDisplayTitle } from "@edgeever/shared";
+import { createDefaultDiagramDocument, createDefaultInfographicDocument, hasArtifactDocumentMarker, hasPosterDocumentMarker, posterFallbackMarkdown, serializePosterDocument, createDefaultTableDocument, diagramFallbackMarkdown, getArtifactLibraryTreeIds, getNotebookScopeIds, hasTableDocumentMarker, infographicFallbackMarkdown, markdownToDoc, parseDiagramDocument, parseInfographicDocument, parseTableDocument, serializeDiagramDocument, serializeInfographicDocument, serializeTableDocument, tableFallbackMarkdown, type NoteCreateKind, type Notebook, type AuthUser, type MemoSummary, type MemoDetail, type MemoTemplate as SavedMemoTemplate, getMemoDisplayTitle } from "@edgeever/shared";
 import { toggleMobileMemoSelection } from "@edgeever/shared/mobile-ui";
 import type {
   Pane,
@@ -154,6 +154,7 @@ const EditorPane = lazy(() => import("./EditorPane").then((module) => ({ default
 const DiagramEditorPane = lazy(() => import("./DiagramEditorPane"));
 const TableEditorPane = lazy(() => import("./TableEditorPane"));
 const PosterEditorPane = lazy(() => import("./PosterEditorPane"));
+const HtmlArtifactReader = lazy(() => import("./HtmlArtifactReader"));
 const InfographicEditorPane = lazy(() => import("./InfographicEditorPane"));
 const AssetsPane = lazy(() => import("./AssetsPane").then((module) => ({ default: module.AssetsPane })));
 const SettingsPane = lazy(() => import("./SettingsPane").then((module) => ({ default: module.SettingsPane })));
@@ -744,7 +745,14 @@ export const WorkspaceApp = ({
       (notebook) => notebook.id === "nb_inbox" || notebook.slug === "inbox" || notebook.name === "等待分类"
     )?.id ?? null;
   const artifactTreeIds = useMemo(() => getArtifactLibraryTreeIds(notebooks), [notebooks]);
-  const createMemoNotebookId = getCreateMemoNotebookId(selectedNotebookId, notebooks, defaultMemoNotebookId);
+  // Ordinary notes never go into the Artifact Library, so creating one there
+  // falls back to the inbox.
+  const createMemoNotebookId = getCreateMemoNotebookId(
+    selectedNotebookId && artifactTreeIds.has(selectedNotebookId) ? null : selectedNotebookId,
+    notebooks,
+    defaultMemoNotebookId,
+  );
+  const htmlArtifactInputRef = useRef<HTMLInputElement>(null);
   const canCreateMemo = Boolean(createMemoNotebookId && memoView !== "trash");
   const memoSelectionModeActive = memoSelectionMode || selectedMemoIds.size > 0;
   const mobileSearchActive = mobileBottomNavActive === "search";
@@ -1308,7 +1316,7 @@ export const WorkspaceApp = ({
 
   const revealCreatedMemo = (memo: MemoDetail) => {
     const targetNotebookId = memo.notebookId;
-    const isStructuredNote = Boolean(parseDiagramDocument(memo.contentMarkdown) || parseTableDocument(memo.contentMarkdown) || parseInfographicDocument(memo.contentMarkdown) || hasPosterDocumentMarker(memo.contentMarkdown));
+    const isStructuredNote = Boolean(parseDiagramDocument(memo.contentMarkdown) || parseTableDocument(memo.contentMarkdown) || parseInfographicDocument(memo.contentMarkdown) || hasPosterDocumentMarker(memo.contentMarkdown) || hasArtifactDocumentMarker(memo.contentMarkdown));
 
     setMemoView("notebook");
     setSearch("");
@@ -1657,12 +1665,16 @@ export const WorkspaceApp = ({
     return false;
   };
   const selectedPosterNote = hasPosterDocumentMarker(selectedMemo?.contentMarkdown);
+  const selectedArtifact = hasArtifactDocumentMarker(selectedMemo?.contentMarkdown);
   const selectedInfographicNote = Boolean(parseInfographicDocument(selectedMemo?.contentMarkdown));
   const desktopNotebookSidebarCollapsed = Boolean(isDesktop && notebookSidebarCollapsed);
   const desktopFocusModeActive = Boolean(
     isDesktop && desktopFocusMode && rightView === "editor" && selectedMemo && !memoSelectionModeActive
   );
-  const selectionMoveNotebookOptions = useMemo(() => getNotebookMoveOptions(notebooks), [notebooks]);
+  const selectionMoveNotebookOptions = useMemo(
+    () => getNotebookMoveOptions(notebooks, selectedNotebook && artifactTreeIds.has(selectedNotebook.id) ? "artifacts" : "notes"),
+    [artifactTreeIds, notebooks, selectedNotebook],
+  );
   const selectedMemosInCurrentList = useMemo(
     () => memos.filter((memo) => selectedMemoIds.has(memo.id)),
     [memos, selectedMemoIds]
@@ -2165,6 +2177,37 @@ export const WorkspaceApp = ({
       .then(createDiagramMemo);
   };
 
+  const importHtmlArtifactMutation = useMutation({
+    mutationFn: async (file: File) => {
+      // Imports land in the open artifact folder, otherwise in the library root.
+      const folderId = selectedNotebookId && artifactTreeIds.has(selectedNotebookId) ? selectedNotebookId : null;
+      return repository.createHtmlArtifact(file, { folderId, locale: i18n.resolvedLanguage });
+    },
+    onSuccess: async ({ memo }) => {
+      setTemplatesOpen(false);
+      setMobileBottomNavActive("home");
+      await queryClient.invalidateQueries({ queryKey: ["notebooks"] });
+      revealCreatedMemo(memo);
+    },
+    onError: (error) => {
+      const code = error instanceof ApiRequestError ? error.code : error instanceof Error ? error.message : null;
+      setAppNoticeDialog({
+        title: t("htmlArtifact.importFailedTitle"),
+        description: t(
+          code === "artifact_invalid_html" ? "htmlArtifact.importInvalid"
+            : code === "artifact_too_large" ? "htmlArtifact.importTooLarge"
+              : code === "artifact_import_offline" ? "htmlArtifact.importOffline"
+                : "htmlArtifact.importFailed",
+        ),
+      });
+    },
+  });
+
+  const handleImportHtmlArtifact = () => {
+    if (memoView === "trash" || importHtmlArtifactMutation.isPending) return;
+    htmlArtifactInputRef.current?.click();
+  };
+
   const handleImportMarkdownFiles = async (files: File[]) => {
     const targetNotebookId = createMemoNotebookId;
 
@@ -2257,13 +2300,27 @@ export const WorkspaceApp = ({
     });
   };
 
+  // Mirrors the server's artifact_location_invalid rule: notes stay outside the
+  // Artifact Library and artifacts stay inside it.
+  const refuseCrossTreeMemoMove = (memoIds: string[], targetNotebookId: string) => {
+    const targetIsArtifactTree = artifactTreeIds.has(targetNotebookId);
+    const memoIdSet = new Set(memoIds);
+    // Where a memo already is tells its kind, also on mirrors that do not derive the artifact flag.
+    if (memos.every((memo) => !memoIdSet.has(memo.id) || artifactTreeIds.has(memo.notebookId) === targetIsArtifactTree)) return false;
+    setAppNoticeDialog({
+      title: t("artifactLibrary.memoLocationInvalidTitle"),
+      description: t("artifactLibrary.memoLocationInvalidDescription"),
+    });
+    return true;
+  };
+
   const handleMoveSelectedMemos = (targetNotebookId: string) => {
     if (selectedMemoIds.size === 0 || memoView === "trash") {
       return;
     }
 
     const memoIds = getMemoIdsNeedingMove(memos, Array.from(selectedMemoIds), targetNotebookId);
-    if (memoIds.length === 0) {
+    if (memoIds.length === 0 || refuseCrossTreeMemoMove(memoIds, targetNotebookId)) {
       return;
     }
 
@@ -2279,7 +2336,7 @@ export const WorkspaceApp = ({
     }
 
     const movableMemoIds = getMemoIdsNeedingMove(memos, memoIds, targetNotebookId);
-    if (movableMemoIds.length === 0) {
+    if (movableMemoIds.length === 0 || refuseCrossTreeMemoMove(movableMemoIds, targetNotebookId)) {
       return;
     }
 
@@ -2295,7 +2352,7 @@ export const WorkspaceApp = ({
     }
 
     const memoIds = getMemoIdsNeedingMove(memos, [memoId], targetNotebookId);
-    if (memoIds.length === 0) {
+    if (memoIds.length === 0 || refuseCrossTreeMemoMove(memoIds, targetNotebookId)) {
       return;
     }
 
@@ -3460,6 +3517,7 @@ export const WorkspaceApp = ({
                   isCreatingMemo={createMemoMutation.isPending}
                   onSelect={handleSelectNotebook}
                   onCreateMemo={handleCreateMemo}
+                  onImportHtmlArtifact={handleImportHtmlArtifact}
                   onCreateNotebook={handleCreateNotebook}
                   onOpenArtifactLibrary={handleOpenArtifactLibrary}
                   onCreateArtifactFolder={handleCreateArtifactFolder}
@@ -3654,7 +3712,7 @@ export const WorkspaceApp = ({
                 const openTextNote = selectedMemo?.id === memoId
                   && !selectedDiagram
                   && !selectedTableNote
-                  && !selectedInfographicNote && !selectedPosterNote;
+                  && !selectedInfographicNote && !selectedPosterNote && !selectedArtifact;
                 if (openTextNote) {
                   memoDocumentActionIdRef.current += 1;
                   setMemoDocumentActionRequest({
@@ -3782,7 +3840,25 @@ export const WorkspaceApp = ({
                         setActivePane("memos");
                       }}
                     >
-                      {selectedMemo && selectedDiagram ? (
+                      {selectedMemo && selectedArtifact ? (
+                        <HtmlArtifactReader
+                          key={selectedMemo.id}
+                          memo={selectedMemo}
+                          repository={repository}
+                          readOnly={memoView === "trash" || selectedMemo.isDeleted}
+                          onBackToList={() => {
+                            clearPendingCreatedMemo();
+                            setSelectedMemoId(null);
+                            setActivePane("memos");
+                          }}
+                          onRenamed={async (memo) => {
+                            cacheMemoDetail(queryClient, memo, memoView);
+                            updateMemoSummaryInLists(queryClient, memoToSummary(memo));
+                            await queryClient.invalidateQueries({ queryKey: ["memos"], refetchType: "inactive" });
+                          }}
+                          onDelete={(memoId) => deleteMemoMutation.mutate({ memoId, permanent: false })}
+                        />
+                      ) : selectedMemo && selectedDiagram ? (
                         <DiagramEditorPane
                           memo={selectedMemo}
                           notebooks={notebooks}
@@ -4088,6 +4164,18 @@ export const WorkspaceApp = ({
           onSubmit={handleSubmitNotebookName}
         />
       )}
+      <input
+        ref={htmlArtifactInputRef}
+        className="hidden"
+        type="file"
+        accept=".html,.htm,text/html"
+        data-html-artifact-input
+        onChange={(event) => {
+          const [file] = Array.from(event.currentTarget.files ?? []);
+          event.currentTarget.value = "";
+          if (file) importHtmlArtifactMutation.mutate(file);
+        }}
+      />
       {notebookDeleteConfirmation && (
         <AppConfirmDialog
           title={t(artifactTreeIds.has(notebookDeleteConfirmation.id) ? "artifactLibrary.deleteFolder.title" : "workspaceDialogs.deleteNotebookTitle", { name: notebookDeleteConfirmation.name })}

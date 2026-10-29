@@ -2,6 +2,7 @@ import type { TiptapDoc } from "./content";
 import type { AiAction, AiPromptParameterKind, AiPromptResultMode } from "./ai-assistant";
 import type { DiagramKind, DiagramSummaryPreview } from "./diagram";
 import type { TableSummaryPreview } from "./table";
+import type { ArtifactSummary } from "./artifact";
 
 export type NoteCreateKind = DiagramKind | "infographic" | "table" | "poster";
 
@@ -41,6 +42,8 @@ export type MemoSummary = {
   tablePreview?: TableSummaryPreview;
   infographic?: boolean;
   poster?: boolean;
+  /** Set on artifacts; older servers omit it. */
+  artifact?: ArtifactSummary;
   videoNote?: boolean;
   tags: string[];
   isPinned: boolean;

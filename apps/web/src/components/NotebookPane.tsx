@@ -15,6 +15,7 @@ import {
   Component,
   PieChart,
   Table2,
+  FileCode2,
   BookPlus,
   Bot,
   FolderPlus,
@@ -379,7 +380,7 @@ const SidebarRailButton = ({
   </Tooltip>
 );
 
-const CreateMemoTypeItems = ({ onCreateMemo }: { onCreateMemo: (kind?: NoteCreateKind) => void }) => {
+const CreateMemoTypeItems = ({ onCreateMemo, onImportHtmlArtifact }: { onCreateMemo: (kind?: NoteCreateKind) => void; onImportHtmlArtifact: () => void }) => {
   const { t } = useTranslation();
 
   return (
@@ -412,6 +413,10 @@ const CreateMemoTypeItems = ({ onCreateMemo }: { onCreateMemo: (kind?: NoteCreat
       <DropdownMenuItem className="gap-2 text-xs leading-5" onSelect={() => onCreateMemo("table")}>
         <Table2 className="h-4 w-4 shrink-0" />
         <span className="min-w-0 flex-1 truncate">{t("structuredTable.name")}</span>
+      </DropdownMenuItem>
+      <DropdownMenuItem className="gap-2 text-xs leading-5" onSelect={onImportHtmlArtifact}>
+        <FileCode2 className="h-4 w-4 shrink-0" />
+        <span className="min-w-0 flex-1 truncate">{t("htmlArtifact.importMenu")}</span>
       </DropdownMenuItem>
     </>
   );
@@ -563,6 +568,7 @@ export const NotebookPane = ({
   onEmptyTrash,
   onOpenSettings,
   onCreateMemo,
+  onImportHtmlArtifact,
   canCreateMemo,
   isCreatingMemo,
   syncSummary,
@@ -602,6 +608,8 @@ export const NotebookPane = ({
   onEmptyTrash: () => void;
   onOpenSettings: () => void;
   onCreateMemo: (kind?: NoteCreateKind) => void;
+  /** Opens the file picker that imports a local .html file as an HTML artifact. */
+  onImportHtmlArtifact: () => void;
   canCreateMemo: boolean;
   isCreatingMemo: boolean;
   syncSummary: SyncQueueSummary;
@@ -859,7 +867,7 @@ export const NotebookPane = ({
               </button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="start" sideOffset={8} className="w-52">
-              <CreateMemoTypeItems onCreateMemo={onCreateMemo} />
+              <CreateMemoTypeItems onCreateMemo={onCreateMemo} onImportHtmlArtifact={onImportHtmlArtifact} />
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
@@ -1131,7 +1139,7 @@ export const NotebookPane = ({
                   <TooltipContent side="right">{t("diagram.createType")}</TooltipContent>
                 </Tooltip>
                 <DropdownMenuContent align="start" side="right" sideOffset={8} className="w-52">
-                  <CreateMemoTypeItems onCreateMemo={onCreateMemo} />
+                  <CreateMemoTypeItems onCreateMemo={onCreateMemo} onImportHtmlArtifact={onImportHtmlArtifact} />
                 </DropdownMenuContent>
               </DropdownMenu>
             </div>

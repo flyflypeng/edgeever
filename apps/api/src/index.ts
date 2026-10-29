@@ -119,6 +119,7 @@ import {
   registerUserRoutes,
 } from "./user-routes";
 import { registerNotebookRoutes } from "./notebook-routes";
+import { registerArtifactRoutes } from "./artifact-routes";
 import { registerNotebookShareRoutes, registerPublicNotebookShareRoutes } from "./notebook-share-routes";
 import { isNotebookSitePagePath, renderNotebookSitePage } from "./notebook-site-page";
 import { isPublicMemoSharePagePath, renderPublicMemoSharePage } from "./share-page";
@@ -343,6 +344,7 @@ registerNotebookRoutes(app, async (env) => {
   if (isDemoMode(env)) await ensureDemoSeed(env);
 });
 
+registerArtifactRoutes(app);
 registerSyncRoutes(app, {
   clampNumber: (...args) => clampNumber(...args),
   mapMemoDetail: (...args) => mapMemoDetail(...args),

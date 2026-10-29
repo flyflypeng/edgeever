@@ -310,6 +310,26 @@ export const createDesktopRepository = (): EdgeEverRepository => ({
     return { memo: await repairDisplayedMemo((await request("memo.get", { memoId: result.memo.id, includeDeleted: false })).memo) };
   },
 
+  renameArtifact: async (memo, title) => {
+    if (typeof navigator !== "undefined" && !navigator.onLine) throw new Error("artifact_rename_offline");
+    const result = await api.updateMemo(memo.id, { title, expectedRevision: memo.revision });
+    await request("sync.apply", {
+      changes: [{ entityType: "memo", operation: "upsert", entityId: result.memo.id, memo: result.memo, notebook: null }],
+    });
+    return { memo: await repairDisplayedMemo((await request("memo.get", { memoId: result.memo.id, includeDeleted: false })).memo) };
+  },
+
+  createHtmlArtifact: async (file, input) => {
+    if (typeof navigator !== "undefined" && !navigator.onLine) throw new Error("artifact_import_offline");
+    // The server stores the HTML and creates the memo; the mirror then keeps it
+    // like any synced memo.
+    const result = await api.createHtmlArtifact(file, input);
+    await request("sync.apply", {
+      changes: [{ entityType: "memo", operation: "upsert", entityId: result.memo.id, memo: result.memo, notebook: null }],
+    });
+    return { memo: await repairDisplayedMemo((await request("memo.get", { memoId: result.memo.id, includeDeleted: false })).memo) };
+  },
+
   listMemos: (params) => {
     const rpcParams: DesktopMemoListParams = {
       ...params,

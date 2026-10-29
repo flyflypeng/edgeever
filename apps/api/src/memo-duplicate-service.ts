@@ -1,4 +1,4 @@
-import { createExcerpt, docToText, emptyDoc, type MemoDetail, type TiptapDoc } from "@edgeever/shared";
+import { createExcerpt, docToText, emptyDoc, hasArtifactDocumentMarker, type MemoDetail, type TiptapDoc } from "@edgeever/shared";
 import { auditStatement } from "./audit";
 import type { AppContext, AuditActor } from "./api-context";
 import { AppError } from "./app-error";
@@ -6,7 +6,7 @@ import { createId, isoNow, parseJsonArray } from "./entity-utils";
 import { sha256 } from "./hash-utils";
 import { getMemoDetail, getMemoDetailRow } from "./memo-service";
 import { upsertMemoSearchDocumentStatement } from "./memo-search-index";
-import { getNotebook } from "./notebook-service";
+import { assertMemoLocation, getNotebook } from "./notebook-service";
 import { resolveObjectStorage } from "./object-storage";
 import { inferImageExtension } from "./resource-service";
 import { getWorkspaceId } from "./request-auth";
@@ -91,6 +91,7 @@ export const duplicateMemoRecord = async (
   if (!(await getNotebook(db, workspaceId, notebookId))) {
     throw new AppError("not_found", "Notebook not found", 404);
   }
+  await assertMemoLocation(db, workspaceId, notebookId, hasArtifactDocumentMarker(source.content_markdown));
 
   const resources = (await db.prepare(
     `SELECT id, object_key, storage_config_id, kind, mime_type, filename, byte_size, sha256, width, height, metadata_json
@@ -162,7 +163,8 @@ export const duplicateMemoRecord = async (
     const idReplacements = new Map(copies.map((copy) => [copy.id, copy.newId]));
     const contentMarkdown = replaceResourceIds(source.content_markdown, idReplacements);
     const contentJson = parseDoc(replaceResourceIds(source.content_json, idReplacements));
-    const contentText = docToText(contentJson);
+    // Artifacts index the text extracted from their HTML, not their fallback body.
+    const contentText = hasArtifactDocumentMarker(source.content_markdown) ? source.content_text : docToText(contentJson);
     const title = input.title?.trim() || source.title;
     const tags = parseJsonArray(source.tags_json);
     const contentHash = await sha256(contentMarkdown + JSON.stringify(contentJson));

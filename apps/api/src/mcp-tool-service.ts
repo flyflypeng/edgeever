@@ -670,7 +670,7 @@ export const callMcpTool = async (
       if (args.contentMarkdown !== undefined) {
         const existing = await getMemoDetail(c.env.storage.db, auth.workspaceId, memoId);
         const rejection = existing && findUpdateMemoContentRejection(existing.contentMarkdown);
-        if (rejection) throw new AppError(rejection.code, rejection.message, 400);
+        if (rejection) throw new AppError(rejection.code, rejection.message, rejection.status ?? 400);
       }
       const actor = getAuditActor(c);
       const actorLabel = getActorLabel(c);

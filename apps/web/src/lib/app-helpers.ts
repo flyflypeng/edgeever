@@ -1,5 +1,5 @@
 import type { MemoSummary, Notebook } from "@edgeever/shared";
-import { DEFAULT_MEMO_TITLE } from "@edgeever/shared";
+import { DEFAULT_MEMO_TITLE, getArtifactLibraryTreeIds } from "@edgeever/shared";
 import { getMobileNotebookSearchVisibleIds } from "@edgeever/shared/mobile-ui";
 import type { MemoFilterMode, MemoSortMode } from "@edgeever/client";
 import { buildNotebookTree, type NotebookNode, type NotebookNodeComparator } from "./utils";
@@ -842,7 +842,13 @@ export const filterMemos = (memos: MemoSummary[], filterMode: MemoFilterMode) =>
 
 export type NotebookMoveOption = { id: string; name: string; selectLabel: string; slug: string | null; depth: number };
 
-export const getNotebookMoveOptions = (notebooks: Notebook[]) => {
+/**
+ * Notebooks a memo can be moved into. Notes stay outside the Artifact Library
+ * and artifacts stay inside it, so each kind only sees its own tree.
+ */
+export const getNotebookMoveOptions = (notebooks: Notebook[], tree: "notes" | "artifacts" = "notes") => {
+  const artifactTreeIds = getArtifactLibraryTreeIds(notebooks);
+  const scoped = notebooks.filter((notebook) => artifactTreeIds.has(notebook.id) === (tree === "artifacts"));
   const options: NotebookMoveOption[] = [];
   const walk = (nodes: NotebookNode[], depth: number) => {
     for (const node of nodes) {
@@ -857,7 +863,7 @@ export const getNotebookMoveOptions = (notebooks: Notebook[]) => {
     }
   };
 
-  walk(buildNotebookTree(notebooks), 0);
+  walk(buildNotebookTree(scoped), 0);
   return options;
 };
 
