@@ -148,3 +148,99 @@ test("imports a local HTML file and renders it in an isolated, interactive sandb
   await page.locator("[data-artifact-library-section]").getByRole("button").first().click();
   await expect(page.locator("[data-memo-id]").filter({ hasText: renamed })).toBeVisible();
 });
+
+test("a #section link scrolls within the artifact instead of blanking it", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto(E2E_WEB_URL);
+  const appUrl = page.url();
+  await importArtifact(page, `section-links-${Date.now()}.html`, `<!doctype html>
+<html>
+<body>
+  <nav><a id="to-far" href="#far"><span id="to-far-label">far</span></a> <a id="own" href="#far">own</a></nav>
+  <div style="height: 4000px"></div>
+  <h2 id="far">Far section</h2>
+  <div style="height: 4000px"></div>
+  <script>
+    document.getElementById("own").addEventListener("click", (event) => {
+      event.preventDefault();
+      event.currentTarget.textContent = "own:handled";
+    });
+  </script>
+</body>
+</html>`);
+
+  const frame = page.frameLocator("[data-html-artifact-reader] iframe");
+  const far = frame.locator("#far");
+  await expect(far).toHaveText("Far section");
+
+  // The page's own click handler keeps priority: no jump to the section.
+  await frame.locator("#own").click();
+  await expect(frame.locator("#own")).toHaveText("own:handled");
+  expect(await far.evaluate(() => window.location.hash)).toBe("");
+
+  // A click on the link's content goes to the section, in the same document.
+  await frame.locator("#to-far-label").click();
+  await expect(far).toBeInViewport();
+  expect(await far.evaluate(() => window.location.hash)).toBe("#far");
+  await expect(frame.locator("#own")).toHaveText("own:handled");
+
+  // The section can be reached again after scrolling away.
+  await far.evaluate(() => window.scrollTo(0, 0));
+  await expect(far).not.toBeInViewport();
+  await frame.locator("#to-far").click();
+  await expect(far).toBeInViewport();
+  expect(page.url()).toBe(appUrl);
+});
+
+test("a link that resolves to the app stays on the artifact, other links still leave", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto(E2E_WEB_URL);
+  const appOrigin = new URL(page.url()).origin;
+  const externalUrl = "https://external.edgeever-e2e.test/page";
+  await page.route(externalUrl, (route) => route.fulfill({ contentType: "text/html", body: "<h1 id=\"arrived\">external</h1>" }));
+  const appLoads: string[] = [];
+  page.on("request", (request) => {
+    if (request.isNavigationRequest() && request.frame() !== page.mainFrame() && request.url().startsWith(appOrigin)) appLoads.push(request.url());
+  });
+
+  await importArtifact(page, `app-links-${Date.now()}.html`, `<!doctype html>
+<html>
+<body>
+  <a id="relative" href="other.html">relative</a>
+  <a id="root-relative" href="/other">root</a>
+  <a id="query" href="?page=2">query</a>
+  <a id="empty" href="">empty</a>
+  <a id="absolute" href="${appOrigin}/other">absolute</a>
+  <a id="to-far" href="#far">far</a>
+  <a id="external" href="${externalUrl}">external</a>
+  <div style="height: 4000px"></div>
+  <h2 id="far">Far section</h2>
+</body>
+</html>`);
+  const frame = page.frameLocator("[data-html-artifact-reader] iframe");
+  for (const id of ["relative", "root-relative", "query", "empty", "absolute"]) await frame.locator(`#${id}`).click();
+  // A later click still lands, so the page is still there; it also gives a navigation time to start.
+  await frame.locator("#to-far").click();
+  await expect(frame.locator("#far")).toBeInViewport();
+  expect(appLoads).toEqual([]);
+
+  // A link to anywhere else behaves as the page wrote it.
+  await frame.locator("#external").click();
+  await expect(frame.locator("#arrived")).toHaveText("external");
+
+  // A page's own <base> pointing at the app is caught as well.
+  await importArtifact(page, `app-base-${Date.now()}.html`, `<!doctype html>
+<html>
+<head><base href="${appOrigin}/sub/"></head>
+<body>
+  <a id="based" href="other.html">based</a>
+  <a id="based-section" href="#far">section</a>
+  <div style="height: 4000px"></div>
+  <h2 id="far">Far section</h2>
+</body>
+</html>`);
+  await frame.locator("#based").click();
+  await frame.locator("#based-section").click();
+  await expect(frame.locator("#far")).toHaveText("Far section");
+  expect(appLoads).toEqual([]);
+});

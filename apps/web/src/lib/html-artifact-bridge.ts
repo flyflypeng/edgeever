@@ -2,8 +2,9 @@ import htmlToImageSource from "html-to-image/dist/html-to-image.js?raw";
 
 /**
  * The bridge between the app and a sandboxed HTML Artifact frame. A small
- * script is put first into the page; it reports the document height and takes
- * screenshots on request, and nothing else.
+ * script is put first into the page; it reports the document height, takes
+ * screenshots on request and keeps the page's links from loading the app into
+ * the frame, and nothing else.
  *
  * Messages are only trusted when they come from that frame's window and carry
  * the channel id chosen for this load. The script removes itself from the DOM
@@ -61,6 +62,8 @@ const bridgeScript = (channel: string, targetOrigin: string) => `(function () {
   var targetOrigin = ${JSON.stringify(targetOrigin)};
   var current = document.currentScript;
   if (current && current.parentNode) current.parentNode.removeChild(current);
+  // Read before the page's own <base> is parsed: this is the app's URL.
+  var appUrl = new URL(document.baseURI);
   var parentWindow = window.parent;
   var realFetch = window.fetch.bind(window);
   var unreadable = 0;
@@ -157,6 +160,24 @@ ${htmlToImageSource}
       var tainted = error === TAINTED || unreadable > 0 || (error && error.name === "SecurityError");
       post({ type: ${JSON.stringify(MESSAGE.captureResult)}, requestId: requestId, ok: false, reason: tainted ? "tainted" : "failed" });
     });
+  });
+  // A srcdoc page resolves its links against the app's URL, so "#section" or
+  // "other.html" would load the app into this sandbox, where it cannot start,
+  // and leave a blank page. An imported page has nothing else at such an address,
+  // so those links stay put. Runs last, so a page handling its own links keeps
+  // doing so.
+  window.addEventListener("click", function (event) {
+    if (event.defaultPrevented || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+    var link = event.target && event.target.closest && event.target.closest("a[href], area[href]");
+    if (!link || link.hasAttribute("download") || (link.getAttribute("target") && link.getAttribute("target") !== "_self")) return;
+    var href = link.getAttribute("href").trim();
+    var url;
+    try { url = new URL(href, document.baseURI); } catch (error) { return; }
+    if (url.protocol !== appUrl.protocol || url.host !== appUrl.host) return;
+    event.preventDefault();
+    // Same-document, so the scroll, :target and hashchange work as usual; replace
+    // keeps the app's Back button from stepping through the page's sections.
+    if (href.charAt(0) === "#") location.replace("about:srcdoc" + href);
   });
 })();`;
 
