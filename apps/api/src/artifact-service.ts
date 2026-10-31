@@ -402,7 +402,8 @@ export const setArtifactThumbnail = async (context: AppContext, input: SetArtifa
       sourceSha256: input.sourceSha256,
     }),
   ]);
-  if (Number(updated?.meta.changes) !== 1) {
+  // Adapter UPDATE metadata may include sync-trigger writes, so only zero means the guard failed.
+  if (!(Number(updated?.meta.changes) > 0)) {
     const orphan = await storedObject(thumbnail.id);
     await db.prepare(`DELETE FROM resources WHERE id = ?`).bind(thumbnail.id).run();
     if (orphan) await deleteStoredObjects(context.env, [orphan]).catch(() => undefined);

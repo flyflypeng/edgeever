@@ -148,4 +148,4 @@ Known limitations:
 
 - `#section` links inside a page do not scroll to the section.
 - A page's own relative resources must be inlined or hosted online before import.
-- Artifacts are never in Jot (they are never in the inbox) and never on public notebook sites.
+- Artifacts are never in the inbox and never on public notebook sites.

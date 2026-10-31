@@ -55,6 +55,7 @@ const ARTIFACT_LIBRARY_NAMES: Record<SupportedLocale, string> = {
   "en-US": "Agent Artifacts",
   ja: "Agent 成果物",
   pl: "Artefakty agenta",
+  ru: "Артефакты агента",
 };
 
 /** Initial name of the lazily created Artifact Library; users may rename it. */

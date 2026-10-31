@@ -81,7 +81,6 @@ export const NotebookTreeItem = ({
   const showsSplitCount = !showDescendantNotes && hasChildren;
   const selected = node.id === selectedNotebookId;
   const isInbox = node.slug === "inbox";
-  const TreeIcon = artifactFolder ? Folder : NotebookIcon;
   const newChildLabel = t(artifactFolder ? "artifactLibrary.folder.newChild" : "notebookTree.newChild");
   const deleteLabel = t(artifactFolder ? "artifactLibrary.folder.delete" : "notebookTree.deleteNotebook");
   const [dropPosition, setDropPosition] = useState<NotebookDropPosition | null>(null);

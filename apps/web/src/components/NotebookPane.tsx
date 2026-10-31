@@ -1091,6 +1091,7 @@ export const NotebookPane = ({
                   onDeleteNotebook={onDeleteNotebook}
                   onMoveNotebook={handleMoveArtifactFolder}
                   onMoveMemos={onMoveMemos}
+                  onEditNotebookAppearance={onEditNotebookAppearance}
                   onDragScroll={handleNotebookScrollDragOver}
                   collapsedNotebookIds={collapsedNotebookIds}
                   onOpenChange={handleNotebookOpenChange}
@@ -1161,7 +1162,7 @@ export const NotebookPane = ({
                 onClick={onToggleCollapsed}
               />
               <SidebarRailButton
-                active={!jotActive && !jotReviewActive && artifactsActive}
+                active={artifactsActive}
                 icon={<Bot className="h-4 w-4" />}
                 label={artifactLibrary?.name ?? t("artifactLibrary.title")}
                 onClick={onOpenArtifactLibrary}

@@ -305,7 +305,7 @@ describe("artifacts are never shared publicly", () => {
 });
 
 describe("artifact list visibility", () => {
-  test("workspace-wide lists and activity leave artifacts out; query, tag, trash and library lists include them", async () => {
+  test("workspace-wide lists leave artifacts out; query, tag, trash and library lists include them", async () => {
     const env = installation();
     const library = await env.ensureLibrary();
     const folder = (await env.request("POST", "/api/v1/notebooks", { name: "Folder", parentId: library.id })).body.notebook;
@@ -320,14 +320,10 @@ describe("artifact list visibility", () => {
     expect(workspace).toContain(note.id);
     expect(workspace).not.toContain(artifact.id);
     expect((await env.request("GET", "/api/v1/memos")).body.totalCount).toBe(workspace.length);
-    const activity = await ids("/api/v1/memos/activity");
-    expect(activity).toContain(note.id);
-    expect(activity).not.toContain(artifact.id);
     expect(await ids("/api/v1/memos?q=pangolin")).toEqual([artifact.id, note.id].sort());
     expect(await ids("/api/v1/memos?tag=shared")).toEqual([artifact.id, note.id].sort());
     expect(await ids(`/api/v1/memos?notebookId=${folder.id}`)).toEqual([artifact.id]);
     expect(await ids(`/api/v1/memos?notebookId=${library.id}&includeDescendants=1`)).toEqual([artifact.id]);
-    expect(await ids(`/api/v1/memos/activity?notebookId=${folder.id}`)).toEqual([artifact.id]);
 
     expect((await env.request("DELETE", `/api/v1/memos/${artifact.id}`)).status).toBe(200);
     expect(await ids("/api/v1/memos?trash=1")).toEqual([artifact.id]);
@@ -381,6 +377,9 @@ describe("artifacts in the trash", () => {
   test("purging an artifact removes every HTML version and thumbnail object; so does emptying the trash", async () => {
     for (const purge of ["single", "empty"]) {
       const env = installation();
+      // The first request seeds the workspace's example notes and their resources.
+      await env.inboxId();
+      const seededFiles = env.storedFiles().sort();
       const memo = (await env.importArtifact(htmlFile("<p>v1</p>"))).body.memo;
       for (const file of [htmlFile("<p>v2</p>", "v2.html"), new File([new Uint8Array([1, 2, 3])], "thumb.webp", { type: "image/webp" })]) {
         const form = new FormData();
@@ -388,7 +387,7 @@ describe("artifacts in the trash", () => {
         expect((await env.send("POST", `/api/v1/memos/${memo.id}/resources`, { body: form })).status).toBe(201);
       }
       expect(await env.resourcesOf(memo.id)).toHaveLength(3);
-      expect(env.storedFiles().length).toBe(3);
+      expect(env.storedFiles().length).toBe(seededFiles.length + 3);
 
       await env.request("DELETE", `/api/v1/memos/${memo.id}`);
       const response = purge === "single"
@@ -396,7 +395,7 @@ describe("artifacts in the trash", () => {
         : await env.request("DELETE", "/api/v1/memos/trash/empty");
       expect(response.status).toBe(200);
       expect(env.sqlite.query("SELECT COUNT(*) AS count FROM resources WHERE memo_id = ?").get(memo.id).count).toBe(0);
-      expect(env.storedFiles()).toEqual([]);
+      expect(env.storedFiles().sort()).toEqual(seededFiles);
     }
   });
 
@@ -672,11 +671,11 @@ describe("MCP artifact tools", () => {
     const notebooksBefore = (await env.request("GET", "/api/v1/notebooks")).body.notebooks.length;
 
     for (const folderPath of ["../Escape", "Projects/../Other", "Projects//AgentEnv", "/Projects", "Projects/", "", "Projects/./x"]) {
-      await expect(call("create_html_artifact", { title: "Page", html: "<p>x</p>", folderPath }))
+      await expect(call("create_html_artifact", { title: "Pangolin path", html: "<p>x</p>", folderPath }))
         .rejects.toMatchObject({ code: "invalid_params", status: 400 });
     }
     expect((await env.request("GET", "/api/v1/notebooks")).body.notebooks).toHaveLength(notebooksBefore);
-    expect((await env.request("GET", "/api/v1/memos?trash=0&q=x")).body.memos).toEqual([]);
+    expect((await env.request("GET", "/api/v1/memos?trash=0&q=Pangolin")).body.memos).toEqual([]);
   });
 
   test("MCP errors carry the same codes as HTTP: size, scopes, half an import key and thumbnail type", async () => {
