@@ -123,7 +123,7 @@ Artifacts often come from agents or other people, so EdgeEver treats every page 
 
 - **Android and iOS** show artifacts read-only: the thumbnail, a short text excerpt and a note to open the artifact on the web or desktop. You can move artifacts between library folders (and change their tags on Android). The page itself is not rendered, and artifacts cannot be imported there.
 - **Older EdgeEver apps** (released before HTML artifacts) connected to an updated server show the library as an ordinary notebook and an artifact as a note with its fallback text; the older web app also shows the hidden envelope as a long comment line. If you edit that text there, the server refuses the save, so the artifact is never damaged. The older web app then keeps showing its unsent edit as "Queued" and the server keeps refusing it. Update the app to read artifacts.
-- **Server upgrade**: the database gains one optional column (migration `0073_artifact_library`). Existing notebooks and notes are not changed, and the library is only created when first used. An older server ignores the column, but it does not have the protection above, so while an older server is running, older apps could overwrite an artifact's body.
+- **Server upgrade**: the database gains one optional column (migration `0084_artifact_library`). Existing notebooks and notes are not changed, and the library is only created when first used. An older server ignores the column, but it does not have the protection above, so while an older server is running, older apps could overwrite an artifact's body.
 
 ## Backup
 
