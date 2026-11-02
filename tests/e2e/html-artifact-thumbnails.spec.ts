@@ -211,3 +211,50 @@ test("the bridge only trusts messages from its own frame with its channel id", a
   expect(result.heights).not.toContain(654321);
   expect(result).toMatchObject({ pageSawSomething: true, pageSawChannel: false });
 });
+
+// HTML accepts all of these, but the screenshot is an SVG the browser parses as
+// XML, where each of them used to fail the whole capture.
+const xmlInvalidPages: Record<string, string> = {
+  "comments containing \"--\"": "<!-- ---------- 实践一 ---------- --><p>after</p><!-- a -- b -->",
+  "control characters in text and attribute values": "<p data-x='a&#1;b'>a&#1;b&#x0B;c&#x0C;d&#xFFFE;e</p><textarea>a&#2;b</textarea>",
+  "a lone surrogate": "<p id=s></p><script>document.getElementById('s').textContent = 'a\\uD800b';</script>",
+  "framework attribute and element names": "<div x-data='{}' x-on:click='go()' :class='c' @click='go()' [hidden]='h' (click)='y()'>v</div><a:b>v</a:b>",
+};
+
+for (const [content, body] of Object.entries(xmlInvalidPages)) {
+  test(`a page with ${content} still captures its first screen`, async ({ page }) => {
+    await page.goto(E2E_WEB_URL);
+
+    const result = await page.evaluate(async (html) => {
+      // Runs in the page, which cannot import statically: the dev server serves the bridge module by URL.
+      const bridgeModule = "/src/lib/html-artifact-bridge.ts";
+      const { ArtifactCaptureError, connectArtifactBridge, createArtifactBridge } = await import(/* @vite-ignore */ bridgeModule);
+      const { channel, srcDoc } = createArtifactBridge(html);
+      const frame = document.createElement("iframe");
+      frame.setAttribute("sandbox", "allow-scripts");
+      frame.style.cssText = "position:fixed;left:-5000px;top:0;width:800px;height:500px";
+      document.body.appendChild(frame);
+      const bridge = connectArtifactBridge(frame, channel);
+      frame.srcdoc = srcDoc;
+      try {
+        await bridge.ready;
+        const image: Blob = await bridge.capture({ area: "viewport", mimeType: "image/png", outputWidth: 200 });
+        const decoded = await createImageBitmap(image);
+        const canvas = new OffscreenCanvas(decoded.width, decoded.height);
+        const context = canvas.getContext("2d")!;
+        context.drawImage(decoded, 0, 0);
+        // Bottom-right corner: the page background, away from the text.
+        const [red, green, blue] = context.getImageData(decoded.width - 2, decoded.height - 2, 1, 1).data;
+        return { ok: true, width: decoded.width, red, green, blue };
+      } catch (error) {
+        return { ok: false, reason: error instanceof ArtifactCaptureError ? error.reason : String(error) };
+      } finally {
+        bridge.dispose();
+        frame.remove();
+      }
+    }, pageHtml("XML", body));
+
+    // The page's teal background, so the picture is the page and not a blank canvas.
+    expect(result).toEqual({ ok: true, width: 200, red: 0x0f, green: 0x76, blue: 0x6e });
+  });
+}

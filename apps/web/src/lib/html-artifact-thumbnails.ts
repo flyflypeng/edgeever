@@ -106,7 +106,11 @@ export const createArtifactThumbnailQueue = (deps: ArtifactThumbnailDeps): Artif
       running += 1;
       void run(target)
         .catch((error: unknown) => {
-          if (!(error instanceof ArtifactCaptureError)) console.warn("HTML artifact thumbnail failed", error);
+          // A tainted page is expected to keep its placeholder; anything else
+          // is a fault that would otherwise leave the card blank without a trace.
+          if (!(error instanceof ArtifactCaptureError && error.reason === "tainted")) {
+            console.warn("HTML artifact thumbnail failed", target.memoId, error);
+          }
         })
         .finally(() => {
           running -= 1;

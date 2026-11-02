@@ -103,7 +103,7 @@
     },
     "apps/desktop": {
       "name": "@edgeever/desktop",
-      "version": "2.2.0",
+      "version": "2.4.0",
       "dependencies": {
         "@agentclientprotocol/sdk": "^1.5.1",
         "@edgeever/public-network": "workspace:*",
@@ -335,6 +335,7 @@
   "patchedDependencies": {
     "expo-sharing@57.0.22": "patches/expo-sharing@57.0.22.patch",
     "@joplin/turndown-plugin-gfm@1.0.68": "patches/@joplin%2Fturndown-plugin-gfm@1.0.68.patch",
+    "html-to-image@1.11.13": "patches/html-to-image@1.11.13.patch",
     "mermaid@11.16.1": "patches/mermaid@11.16.1.patch",
     "npm@11.21.0": "patches/npm@11.21.0.patch",
   },
