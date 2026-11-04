@@ -155,6 +155,48 @@ export const buildTagTree = (items: readonly TagActivityItem[], locale?: string)
   return sortNodes(roots, locale);
 };
 
+/**
+ * The tag text a picker writes when a node is checked: the stored spelling when
+ * the node has one, otherwise the canonical path shown in the tree.
+ */
+export const tagNodeToggleName = (node: TagTreeNode) => node.names[0] ?? node.key;
+
+const tagNodeNames = (node: TagTreeNode) => (node.names.length > 0 ? node.names : [node.key]);
+
+export const tagNodeIsSelected = (node: TagTreeNode, selectedNames: ReadonlySet<string>) =>
+  tagNodeNames(node).some((name) => selectedNames.has(name.toLowerCase()));
+
+/** Whether a stored tag with this exact text exists; levels alone do not count. */
+export const tagTreeHasName = (nodes: readonly TagTreeNode[], name: string) => {
+  const wanted = name.trim().toLowerCase();
+  if (!wanted) return false;
+  for (const node of nodes) {
+    if (node.names.some((candidate) => candidate.toLowerCase() === wanted)) return true;
+    if (tagTreeHasName(node.children, name)) return true;
+  }
+  return false;
+};
+
+/**
+ * Prunes the tree to the nodes matching a search, keeping the ancestors that
+ * lead to them so a hit never loses its path.
+ */
+export const filterTagTree = (nodes: readonly TagTreeNode[], query: string): TagTreeNode[] => {
+  const needle = query.trim().toLowerCase();
+  if (!needle) return [...nodes];
+
+  const keep: TagTreeNode[] = [];
+  for (const node of nodes) {
+    const children = filterTagTree(node.children, query);
+    const matches = node.key.includes(needle)
+      || node.label.toLowerCase().includes(needle)
+      || node.names.some((name) => name.toLowerCase().includes(needle));
+    if (!matches && children.length === 0) continue;
+    keep.push(children === node.children ? node : { ...node, children });
+  }
+  return keep;
+};
+
 export const findTagNode = (nodes: readonly TagTreeNode[], key: string): TagTreeNode | null => {
   for (const node of nodes) {
     if (node.key === key) return node;

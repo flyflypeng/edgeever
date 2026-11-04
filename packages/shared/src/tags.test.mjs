@@ -1,11 +1,16 @@
 import { describe, expect, test } from "bun:test";
 import {
   buildTagTree,
+  filterTagTree,
+  findTagNode,
   normalizeTagPath,
   planTagRemoval,
   planTagRename,
   resolveTagNodeKey,
   splitTagDisplay,
+  tagNodeIsSelected,
+  tagNodeToggleName,
+  tagTreeHasName,
 } from "./tags.ts";
 
 describe("tag path normalization", () => {
@@ -169,5 +174,50 @@ describe("tag rename plan", () => {
     const plan = planTagRemoval(node);
     expect(plan.names).toEqual(["a", "a/b", "a/b/c"]);
     expect(plan.count).toBe(3);
+  });
+});
+
+describe("tag tree selection helpers", () => {
+  const tree = buildTagTree([
+    { id: "m1", tags: ["📚读书/人文/历史"] },
+    { id: "m2", tags: ["📚读书/小说/科幻"] },
+    { id: "m3", tags: ["Topic/Kernel"] },
+  ]);
+
+  test("names a node after its stored spelling, falling back to the tree key", () => {
+    const reading = tree.find((node) => node.key === "📚读书");
+    expect(reading.names).toEqual([]);
+    expect(tagNodeToggleName(reading)).toBe("📚读书");
+    const history = findTagNode(tree, "📚读书/人文/历史");
+    expect(tagNodeToggleName(history)).toBe("📚读书/人文/历史");
+    const kernel = findTagNode(tree, "topic/kernel");
+    expect(tagNodeToggleName(kernel)).toBe("Topic/Kernel");
+  });
+
+  test("matches a selected tag against every stored spelling of a node", () => {
+    const kernel = findTagNode(tree, "topic/kernel");
+    expect(tagNodeIsSelected(kernel, new Set(["topic/kernel"]))).toBe(true);
+    expect(tagNodeIsSelected(kernel, new Set(["other"]))).toBe(false);
+    const reading = tree.find((node) => node.key === "📚读书");
+    expect(tagNodeIsSelected(reading, new Set(["📚读书"]))).toBe(true);
+  });
+
+  test("keeps ancestors of a search hit and drops the rest", () => {
+    const filtered = filterTagTree(tree, "科幻");
+    expect(filtered.map((node) => node.key)).toEqual(["📚读书"]);
+    expect(filtered[0].children.map((node) => node.key)).toEqual(["📚读书/小说"]);
+    expect(filtered[0].children[0].children.map((node) => node.key)).toEqual(["📚读书/小说/科幻"]);
+    expect(filterTagTree(tree, "读书").map((node) => node.key)).toEqual(["📚读书"]);
+    // The lowercase tree key and the stored spelling both match.
+    expect(filterTagTree(tree, "topic").map((node) => node.key)).toEqual(["topic"]);
+    expect(filterTagTree(tree, "Topic").map((node) => node.key)).toEqual(["topic"]);
+    expect(filterTagTree(tree, "  ")).toEqual(tree);
+    expect(filterTagTree(tree, "没有这个标签")).toEqual([]);
+  });
+
+  test("reports whether a name already exists anywhere in the tree", () => {
+    expect(tagTreeHasName(tree, "📚读书/人文/历史")).toBe(true);
+    expect(tagTreeHasName(tree, "topic/kernel")).toBe(true);
+    expect(tagTreeHasName(tree, "📚读书")).toBe(false);
   });
 });

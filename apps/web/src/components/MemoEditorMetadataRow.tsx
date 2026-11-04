@@ -14,7 +14,7 @@ type MemoEditorMetadataRowProps = {
   mobileNotebookPickerOpen: boolean;
   notebookOptions: NotebookMoveOption[];
   notebookUpdatePending: boolean;
-  repository: Pick<EdgeEverRepository, "listTags">;
+  repository: Pick<EdgeEverRepository, "listMemoActivity">;
   selectedNotebookId: string;
   tagsText: string;
   title: string;
@@ -151,7 +151,7 @@ export const MemoEditorMetadataRow = ({
         <EditorTagPicker
           contentMarkdown={contentMarkdown}
           disabled={disabled}
-          loadTags={() => repository.listTags()}
+          loadTagActivity={() => repository.listMemoActivity({ includeArtifacts: true })}
           title={title}
           value={tagsText}
           onChange={onTagsChange}

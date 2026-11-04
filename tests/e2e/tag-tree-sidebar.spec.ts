@@ -154,6 +154,47 @@ test("renames a tag subtree, confirms a merge, and removes the tags", async ({ p
   });
 });
 
+test("picks tags from a tree in the editor tag picker", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto(E2E_WEB_URL);
+
+  await withTagFixtures(page, async ({ root, createMemo }) => {
+    const deep = await createMemo(`picker ${root}`, [`${root}/人文/历史`]);
+    await createMemo(`picker sibling ${root}`, [`${root}/小说/科幻`]);
+
+    await page.reload();
+    await page.locator(`[data-memo-id="${deep.id}"] button`).first().click();
+    await expect(page.getByRole("textbox", { name: "无标题笔记" })).toBeVisible();
+    await page.locator(".edgeever-editor-tag-trigger").click();
+
+    const picker = page.locator("[data-tag-picker-tree]");
+    await expect(picker).toBeVisible();
+    // The picker shows levels, not one flat row per full tag path.
+    await expect(picker.getByRole("button", { name: `展开标签 ${root}`, exact: true })).toHaveCount(0);
+    await expect(picker.locator(`[data-tag-picker-node="${root}"]`)).toHaveCount(1);
+    await expect(picker.locator(`[data-tag-picker-node="${root}/人文"]`)).toBeVisible();
+    await expect(picker.locator(`[data-tag-picker-node="${root}/人文/历史"]`)).toBeVisible();
+    await expect(picker.locator(`[data-tag-picker-node="${root}/小说/科幻"]`)).toBeVisible();
+
+    // Searching keeps the levels that lead to the hit.
+    await page.getByRole("dialog").getByRole("textbox").fill("科幻");
+    await expect(picker.locator(`[data-tag-picker-node="${root}/人文/历史"]`)).toHaveCount(0);
+    await expect(picker.locator(`[data-tag-picker-node="${root}/小说"]`)).toBeVisible();
+    await expect(picker.locator(`[data-tag-picker-node="${root}/小说/科幻"]`)).toBeVisible();
+    await page.getByRole("dialog").getByRole("textbox").fill("");
+
+    // Ticking a level writes its full path, and unticking removes it again.
+    await picker.locator(`[data-tag-picker-node="${root}/小说/科幻"] button[aria-pressed]`).click();
+    await expect(page.getByRole("button", { name: `移除标签 ${root}/小说/科幻` })).toBeVisible();
+    await picker.locator(`[data-tag-picker-node="${root}/小说/科幻"] button[aria-pressed]`).click();
+    await expect(page.getByRole("button", { name: `移除标签 ${root}/小说/科幻` })).toHaveCount(0);
+
+    // Collapsing a level hides everything below it.
+    await picker.getByRole("button", { name: `折叠标签 ${root}`, exact: true }).click();
+    await expect(picker.locator(`[data-tag-picker-node="${root}/人文"]`)).toHaveCount(0);
+  });
+});
+
 test("keeps the tag tree out of the collapsed rail and reveals it from the toolbar", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.goto(E2E_WEB_URL);

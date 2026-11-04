@@ -1,8 +1,18 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { CircleAlert, Check, ChevronDown, Loader2, Tag, TagPlus, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import { normalizeTags, type TagSummary } from "@edgeever/shared";
+import {
+  buildTagTree,
+  filterTagTree,
+  normalizeTags,
+  tagNodeIsSelected,
+  tagNodeToggleName,
+  tagTreeHasName,
+  type MemoActivityResponse,
+  type TagTreeNode,
+} from "@edgeever/shared";
+import { TAG_TREE_QUERY_KEY } from "@/components/TagTreeSection";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -19,10 +29,91 @@ import { parseTagsText } from "@/lib/utils";
 type EditorTagPickerProps = {
   contentMarkdown: string;
   disabled: boolean;
-  loadTags: () => Promise<{ tags: TagSummary[] }>;
+  /** Per-memo tag data for the whole workspace; the sidebar tree uses the same query. */
+  loadTagActivity: () => Promise<MemoActivityResponse>;
   title: string;
   value: string;
   onChange: (value: string) => void;
+};
+
+/** One row of the picker's tag tree: a level to expand, or a tag to toggle. */
+const TagPickerTreeRow = ({
+  node,
+  depth,
+  collapsedKeys,
+  onToggleOpen,
+  onToggleTag,
+  selectedNames,
+}: {
+  node: TagTreeNode;
+  depth: number;
+  collapsedKeys: ReadonlySet<string>;
+  onToggleOpen: (key: string, open: boolean) => void;
+  onToggleTag: (name: string) => void;
+  selectedNames: ReadonlySet<string>;
+}) => {
+  const { t } = useTranslation();
+  const hasChildren = node.children.length > 0;
+  const open = hasChildren && !collapsedKeys.has(node.key);
+  const selected = tagNodeIsSelected(node, selectedNames);
+  const name = tagNodeToggleName(node);
+
+  return (
+    <div>
+      <div
+        className="flex min-h-11 items-center gap-2 border-b border-slate-100 pr-3 text-xs last:border-b-0 hover:bg-slate-50"
+        style={{ paddingLeft: `${8 + depth * 16}px` }}
+        data-tag-picker-node={node.key}
+      >
+        {hasChildren ? (
+          <button
+            type="button"
+            className="flex h-6 w-5 shrink-0 items-center justify-center rounded transition-colors hover:bg-slate-100"
+            aria-label={open ? t("tagTree.collapse", { name: node.key }) : t("tagTree.expand", { name: node.key })}
+            aria-expanded={open}
+            onClick={() => onToggleOpen(node.key, !open)}
+          >
+            <ChevronDown className={open ? "h-4 w-4" : "h-4 w-4 -rotate-90"} aria-hidden="true" />
+          </button>
+        ) : (
+          <span className="h-6 w-5 shrink-0" aria-hidden="true" />
+        )}
+        <button
+          type="button"
+          className="flex min-h-11 min-w-0 flex-1 items-center gap-2 text-left outline-none focus-visible:bg-slate-100"
+          aria-pressed={selected}
+          onClick={() => onToggleTag(name)}
+        >
+          <span
+            className={`flex h-5 w-5 shrink-0 items-center justify-center rounded border ${selected ? "border-[var(--checkbox-on)] bg-[var(--checkbox-on)] text-[var(--checkbox-mark)]" : "border-slate-300 bg-card text-transparent"}`}
+            aria-hidden="true"
+          >
+            {selected && <Check className="h-3.5 w-3.5" />}
+          </span>
+          {node.icon ? (
+            <span className="flex h-4 w-4 shrink-0 items-center justify-center text-sm leading-none" aria-hidden="true">{node.icon}</span>
+          ) : (
+            <Tag className="h-3.5 w-3.5 shrink-0 text-slate-400" aria-hidden="true" />
+          )}
+          <span className="min-w-0 flex-1 truncate font-medium">{node.label}</span>
+          <span className="shrink-0 text-xs text-slate-400">{t("editor.tagPicker.memoCount", { count: node.count })}</span>
+        </button>
+      </div>
+      {open
+        ? node.children.map((child) => (
+          <TagPickerTreeRow
+            key={child.key}
+            node={child}
+            depth={depth + 1}
+            collapsedKeys={collapsedKeys}
+            onToggleOpen={onToggleOpen}
+            onToggleTag={onToggleTag}
+            selectedNames={selectedNames}
+          />
+        ))
+        : null}
+    </div>
+  );
 };
 
 type AiGenerationStatus =
@@ -31,7 +122,7 @@ type AiGenerationStatus =
   | { kind: "empty" }
   | { kind: "error"; message: string };
 
-export const EditorTagPicker = ({ contentMarkdown, disabled, loadTags, title, value, onChange }: EditorTagPickerProps) => {
+export const EditorTagPicker = ({ contentMarkdown, disabled, loadTagActivity, title, value, onChange }: EditorTagPickerProps) => {
   const { t, i18n } = useTranslation();
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -44,18 +135,28 @@ export const EditorTagPicker = ({ contentMarkdown, disabled, loadTags, title, va
     () => new Set(selectedTags.map((tag) => tag.toLocaleLowerCase())),
     [selectedTags],
   );
+  const [collapsedKeys, setCollapsedKeys] = useState<ReadonlySet<string>>(new Set());
   const tagsQuery = useQuery({
-    queryKey: ["tags"],
-    queryFn: loadTags,
+    queryKey: TAG_TREE_QUERY_KEY,
+    queryFn: loadTagActivity,
     enabled: open,
   });
+  const tagTree = useMemo(
+    () => buildTagTree(tagsQuery.data?.memos ?? [], i18n.resolvedLanguage ?? i18n.language),
+    [i18n.language, i18n.resolvedLanguage, tagsQuery.data],
+  );
   const normalizedQuery = query.trim().replace(/^#/, "");
-  const visibleTags = (tagsQuery.data?.tags ?? []).filter((tag) =>
-    tag.name.toLocaleLowerCase().includes(normalizedQuery.toLocaleLowerCase())
-  );
-  const exactMatch = (tagsQuery.data?.tags ?? []).some(
-    (tag) => tag.name.toLocaleLowerCase() === normalizedQuery.toLocaleLowerCase()
-  );
+  // A search keeps the levels leading to a hit, so the path stays readable.
+  const visibleTree = useMemo(() => filterTagTree(tagTree, normalizedQuery), [normalizedQuery, tagTree]);
+  const exactMatch = tagTreeHasName(tagTree, normalizedQuery);
+  const handleToggleOpen = useCallback((key: string, open: boolean) => {
+    setCollapsedKeys((previous) => {
+      const next = new Set(previous);
+      if (open) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }, []);
 
   useEffect(() => () => {
     suggestionControllerRef.current?.abort();
@@ -63,9 +164,11 @@ export const EditorTagPicker = ({ contentMarkdown, disabled, loadTags, title, va
   }, []);
 
   const commit = (tags: string[]) => onChange(normalizeTags(tags).join(", "));
+  // A node can stand for several stored spellings, so removal drops them all.
   const toggleTag = (name: string) => {
-    commit(selectedTags.includes(name)
-      ? selectedTags.filter((tag) => tag !== name)
+    const key = name.toLocaleLowerCase();
+    commit(selectedTagKeys.has(key)
+      ? selectedTags.filter((tag) => tag.toLocaleLowerCase() !== key)
       : [...selectedTags, name]);
   };
   const createTag = () => {
@@ -133,6 +236,7 @@ export const EditorTagPicker = ({ contentMarkdown, disabled, loadTags, title, va
     setOpen(nextOpen);
     if (nextOpen) return;
     setQuery("");
+    setCollapsedKeys(new Set());
   };
   const aiLabel = suggesting
     ? t("editor.tagPicker.aiGenerating")
@@ -256,30 +360,23 @@ export const EditorTagPicker = ({ contentMarkdown, disabled, loadTags, title, va
             </Button>
           </form>
 
-          <div className="min-h-0 flex-1 overflow-y-auto rounded-md border border-slate-200">
+          <div className="min-h-0 flex-1 overflow-y-auto rounded-md border border-slate-200" data-tag-picker-tree>
             {tagsQuery.isLoading ? (
               <p className="px-4 py-8 text-center text-xs text-slate-500">{t("editor.tagPicker.loading")}</p>
-            ) : visibleTags.length === 0 ? (
+            ) : visibleTree.length === 0 ? (
               <p className="px-4 py-8 text-center text-xs text-slate-500">{t("editor.tagPicker.empty")}</p>
             ) : (
-              visibleTags.map((tag) => {
-                const selected = selectedTags.includes(tag.name);
-                return (
-                  <button
-                    key={tag.name}
-                    type="button"
-                    className="flex min-h-11 w-full items-center gap-3 border-b border-slate-100 px-3 text-left text-xs outline-none last:border-b-0 hover:bg-slate-50 focus-visible:bg-slate-100"
-                    onClick={() => toggleTag(tag.name)}
-                    aria-pressed={selected}
-                  >
-                    <span className={`flex h-5 w-5 shrink-0 items-center justify-center rounded border ${selected ? "border-[var(--checkbox-on)] bg-[var(--checkbox-on)] text-[var(--checkbox-mark)]" : "border-slate-300 bg-card text-transparent"}`}>
-                      {selected && <Check className="h-3.5 w-3.5" />}
-                    </span>
-                    <span className="min-w-0 flex-1 truncate font-medium">#{tag.name}</span>
-                    <span className="text-xs text-slate-400">{t("editor.tagPicker.memoCount", { count: tag.memoCount })}</span>
-                  </button>
-                );
-              })
+              visibleTree.map((node) => (
+                <TagPickerTreeRow
+                  key={node.key}
+                  node={node}
+                  depth={0}
+                  collapsedKeys={collapsedKeys}
+                  onToggleOpen={handleToggleOpen}
+                  onToggleTag={toggleTag}
+                  selectedNames={selectedTagKeys}
+                />
+              ))
             )}
           </div>
         </DialogContent>

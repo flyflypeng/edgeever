@@ -202,7 +202,7 @@ export default function HtmlArtifactReader({
           <EditorTagPicker
             contentMarkdown={memo.contentText}
             disabled={readOnly}
-            loadTags={() => repository.listTags()}
+            loadTagActivity={() => repository.listMemoActivity({ includeArtifacts: true })}
             title={title}
             value={tagsText}
             onChange={commitTags}

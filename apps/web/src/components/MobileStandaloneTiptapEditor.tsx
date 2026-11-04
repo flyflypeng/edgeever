@@ -7,7 +7,7 @@ import { FileAttachment } from "@/components/editor/FileAttachment";
 import Image from "@tiptap/extension-image";
 import { mergeAttributes } from "@tiptap/core";
 import Placeholder from "@tiptap/extension-placeholder";
-import { ImageGallery, createExcerpt, createEdgeEverDocumentExtensions, docToMarkdown, docToText, emptyDoc, getImageReferrerPolicy, isPdfAttachment, wrapDetailsContentHtml, type MemoDetail, type MemoEditSession, type Notebook, type TagSummary, type TiptapDoc } from "@edgeever/shared";
+import { ImageGallery, createExcerpt, createEdgeEverDocumentExtensions, docToMarkdown, docToText, emptyDoc, getImageReferrerPolicy, isPdfAttachment, wrapDetailsContentHtml, type MemoActivityResponse, type MemoDetail, type MemoEditSession, type Notebook, type TiptapDoc } from "@edgeever/shared";
 import { createEdgeEverMathematics } from "@edgeever/shared/mathematics";
 import { createNativeImageGalleryView, NATIVE_IMAGE_GALLERY_CSS } from "@edgeever/shared/native-image-gallery";
 import { NEW_IMAGE_WIDTH_PERCENT } from "@edgeever/shared/image-display";
@@ -52,7 +52,7 @@ import { createMarkdownImagePasteRule } from "@/lib/markdown-image-paste";
 import { preserveEmptyListIndentOnBackspace, wrapIndentedParagraphInList } from "@/lib/editor-shortcuts";
 import { ThemeBlock } from "./ThemeBlock";
 import { EditorTagPicker } from "./EditorTagPicker";
-import { listLocalTags } from "@/lib/local-mirror";
+import { listLocalMemoActivity } from "@/lib/local-mirror";
 
 const ProtectedExternalImage = Image.extend({
   addPasteRules() {
@@ -566,12 +566,12 @@ export const MobileStandaloneTiptapEditor = ({
     scheduleMetadataSave();
   };
 
-  const loadTags = useCallback(async () => {
+  const loadTagActivity = useCallback(async () => {
     if (memoId) {
       const localMemo = await localDb.memos.filter((candidate) => candidate.id === memoId).first();
-      if (localMemo) return listLocalTags(localMemo.scope);
+      if (localMemo) return listLocalMemoActivity(localMemo.scope, { includeArtifacts: true });
     }
-    return requestMobileEditorJson<{ tags: TagSummary[] }>("/api/v1/tags");
+    return requestMobileEditorJson<MemoActivityResponse>("/api/v1/memos/activity?includeArtifacts=1");
   }, [memoId]);
 
   const handleNotebookChange = async (nextNotebookId: string) => {
@@ -988,7 +988,7 @@ export const MobileStandaloneTiptapEditor = ({
           <EditorTagPicker
             contentMarkdown={fallbackMarkdown}
             disabled={!memo || saveState === "loading"}
-            loadTags={loadTags}
+            loadTagActivity={loadTagActivity}
             title={title}
             value={tagsText}
             onChange={handleTagsChange}

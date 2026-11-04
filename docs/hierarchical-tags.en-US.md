@@ -14,6 +14,10 @@ The "Tags" section sits below "Agent Artifacts" in the first column, where every
 - Levels are sorted by name, numbers in natural order, and a leading emoji does not affect sorting.
 - When a level starts with an emoji, that emoji becomes the node icon.
 
+### Picking tags in the editor
+
+Click the tag area at the top of a note to open "Choose tags". The list is the same tag tree: ticking any level writes its full path, and searching keeps the levels leading to the hit.
+
 ### Filtering by tag
 
 Click any node and the second column lists the notes and Agent Artifacts carrying that tag or any tag below it, across the whole workspace. Clicking a tag on a note card switches the filter as well, and expands and scrolls the tree to the matching node.
