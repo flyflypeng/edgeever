@@ -134,9 +134,9 @@ const TagTreeItem = ({
                     }}
                   >
                     {node.icon ? (
-                      <span className="flex h-4 w-4 shrink-0 items-center justify-center text-sm leading-none" aria-hidden="true">{node.icon}</span>
+                      <span className="flex h-4 w-4 shrink-0 items-center justify-center text-[15px] leading-none" aria-hidden="true">{node.icon}</span>
                     ) : (
-                      <TagIcon className={cn("h-4 w-4 shrink-0 transition-colors duration-200", selected ? "text-slate-950" : "text-slate-500")} aria-hidden="true" />
+                      <TagIcon className={cn("h-3.5 w-3.5 shrink-0 transition-colors duration-200", selected ? "text-slate-950" : "text-slate-500")} aria-hidden="true" />
                     )}
                     <span
                       className={cn(

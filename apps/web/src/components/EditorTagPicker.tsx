@@ -85,13 +85,13 @@ const TagPickerTreeRow = ({
           onClick={() => onToggleTag(name)}
         >
           <span
-            className={`flex h-5 w-5 shrink-0 items-center justify-center rounded border ${selected ? "border-[var(--checkbox-on)] bg-[var(--checkbox-on)] text-[var(--checkbox-mark)]" : "border-slate-300 bg-card text-transparent"}`}
+            className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border ${selected ? "border-[var(--checkbox-on)] bg-[var(--checkbox-on)] text-[var(--checkbox-mark)]" : "border-slate-300 bg-card text-transparent"}`}
             aria-hidden="true"
           >
-            {selected && <Check className="h-3.5 w-3.5" />}
+            {selected && <Check className="h-3 w-3" />}
           </span>
           {node.icon ? (
-            <span className="flex h-4 w-4 shrink-0 items-center justify-center text-sm leading-none" aria-hidden="true">{node.icon}</span>
+            <span className="flex h-4 w-4 shrink-0 items-center justify-center text-[15px] leading-none" aria-hidden="true">{node.icon}</span>
           ) : (
             <Tag className="h-3.5 w-3.5 shrink-0 text-slate-400" aria-hidden="true" />
           )}
