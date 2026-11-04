@@ -1,4 +1,4 @@
-import type { Notebook } from "@edgeever/shared";
+import { normalizeTagPath, type Notebook } from "@edgeever/shared";
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
 
@@ -60,7 +60,9 @@ export const formatDateTime = (value: string) =>
   }).format(new Date(value));
 
 export const parseTagsText = (value: string) =>
-  value
-    .split(/[,，\n]+/)
-    .map((tag) => tag.trim().replace(/^#/, ""))
-    .filter(Boolean);
+  Array.from(new Set(
+    value
+      .split(/[,，\n]+/)
+      .map(normalizeTagPath)
+      .filter(Boolean)
+  ));

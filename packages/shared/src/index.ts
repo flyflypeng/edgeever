@@ -43,6 +43,7 @@ export * from "./diagram-canvas";
 export * from "./infographic";
 export * from "./infographic-syntax";
 export * from "./table";
+export * from "./tags";
 export * from "./diagram-palette";
 export * from "./diagram-flowchart-style";
 export * from "./diagram-architecture-style";

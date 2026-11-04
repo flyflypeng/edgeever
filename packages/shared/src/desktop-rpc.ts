@@ -66,6 +66,8 @@ export type DesktopMemoListParams = {
   notebookIds?: string[];
   q?: string;
   tag?: string;
+  /** Matches memos carrying any of these tags; the tag tree sends a whole subtree. */
+  tagAny?: string[];
   trash?: boolean;
   sort?: "updated-desc" | "created-desc" | "title-asc" | "title-desc";
   filter?: "all" | "pinned" | "tagged" | "untagged";
@@ -173,7 +175,7 @@ export type DesktopRpcParams = {
   "memo.pinBatch": { memoIds: string[]; isPinned: boolean };
   "memo.merge": { memoIds: string[]; notebookId?: string; title?: string };
   "memo.list": DesktopMemoListParams;
-  "memo.activity": { notebookId?: string | null };
+  "memo.activity": { notebookId?: string | null; includeArtifacts?: boolean };
   "memo.get": { memoId: string; includeDeleted?: boolean };
   "memo.create": DesktopMemoCreateParams;
   "memo.update": DesktopMemoUpdateParams;

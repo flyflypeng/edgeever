@@ -374,7 +374,10 @@ export const createDesktopRepository = (): EdgeEverRepository => ({
     };
   },
 
-  listMemoActivity: (params) => request("memo.activity", { notebookId: params.notebookId ?? null }),
+  listMemoActivity: (params) => request("memo.activity", {
+    notebookId: params.notebookId ?? null,
+    ...(params.includeArtifacts ? { includeArtifacts: true } : {}),
+  }),
 
   getMemo: async (memoId, includeDeleted = false) => {
     const result = await request("memo.get", { memoId, includeDeleted });

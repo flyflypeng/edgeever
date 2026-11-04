@@ -54,6 +54,8 @@ export type ListMemosInput = {
   includeNotebookDescendants?: boolean;
   query?: string;
   tag?: string;
+  /** Matches memos carrying any of these tags; the tag tree sends a whole subtree. */
+  tagAny?: string[];
   includeTrash?: boolean;
   sort?: string;
   filter?: string;
@@ -78,6 +80,8 @@ export type ListMemosResult = {
 export type ListMemoActivityInput = {
   workspaceId: string;
   notebookId?: string | null;
+  /** Workspace-wide activity normally leaves the Artifact Library out. */
+  includeArtifacts?: boolean;
 };
 
 export type ListMemoActivityResult = {
@@ -200,6 +204,7 @@ export const listMemos = async (
   const notebookId = input.notebookId;
   const query = input.query?.trim();
   const tag = input.tag?.trim();
+  const tagAny = Array.from(new Set((input.tagAny ?? []).map((value) => value.trim()).filter(Boolean)));
   const includeTrash = input.includeTrash === true;
   const pinnedFirst = input.pinnedFirst !== false;
   const withContent = input.withContent === true;
@@ -239,7 +244,7 @@ export const listMemos = async (
     }
   }
 
-  if (!notebookId && !query && !tag && !includeTrash) {
+  if (!notebookId && !query && !tag && tagAny.length === 0 && !includeTrash) {
     baseConditions.push(`m.notebook_id NOT IN (${artifactLibraryNotebookIdsSql})`);
     baseBinds.push(input.workspaceId, input.workspaceId);
   }
@@ -249,6 +254,19 @@ export const listMemos = async (
       "EXISTS (SELECT 1 FROM memo_tags mt WHERE mt.memo_id = m.id AND mt.workspace_id = ? AND mt.normalized_name = LOWER(?))",
     );
     baseBinds.push(input.workspaceId, tag);
+  }
+
+  if (tagAny.length > 0) {
+    // One bound JSON array instead of a placeholder per tag: D1 allows at most
+    // 100 bound parameters per statement, and a subtree can hold far more.
+    baseConditions.push(
+      `EXISTS (
+         SELECT 1 FROM memo_tags mt
+         WHERE mt.memo_id = m.id AND mt.workspace_id = ?
+           AND mt.normalized_name IN (SELECT LOWER(value) FROM json_each(?))
+       )`,
+    );
+    baseBinds.push(input.workspaceId, JSON.stringify(tagAny));
   }
 
   if (filter === "tagged") baseConditions.push("m.tags_json <> '[]'");
@@ -439,7 +457,7 @@ export const listMemoActivity = async (
   if (input.notebookId) {
     conditions.push("notebook_id = ?");
     binds.push(input.notebookId);
-  } else {
+  } else if (!input.includeArtifacts) {
     conditions.push(`notebook_id NOT IN (${artifactLibraryNotebookIdsSql})`);
     binds.push(input.workspaceId, input.workspaceId);
   }

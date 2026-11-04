@@ -649,3 +649,40 @@ describe("local mirror", () => {
     }
   });
 });
+
+describe("tag tree filters", () => {
+  const scope = async () => {
+    const value = createLocalDataScope("https://demo.edgeever.org", "user-1");
+    await putLocalNotebook(value, {
+      id: "nb-library", parentId: null, name: "library", slug: "library", icon: null, color: null, sortOrder: 0,
+      memoCount: 0, lastMemoUpdatedAt: null, createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z",
+      systemKind: "artifact_library",
+    });
+    return value;
+  };
+
+  test("tagAny matches any listed tag, case-insensitively, and keeps artifacts", async () => {
+    const value = await scope();
+    const parent = await createLocalMemo(value, { notebookId: "nb-inbox", tags: ["a"] });
+    const child = await createLocalMemo(value, { notebookId: "nb-inbox", tags: ["A/b"] });
+    const unrelated = await createLocalMemo(value, { notebookId: "nb-inbox", tags: ["z"] });
+    const artifact = await createLocalMemo(value, { notebookId: "nb-library", tags: ["a/b/c"] });
+
+    const ids = async (params) => (await listLocalMemos(value, params)).memos.map((memo) => memo.id).sort();
+    expect(await ids({ tagAny: ["a", "a/b", "a/b/c"] })).toEqual([parent.id, child.id, artifact.id].sort());
+    expect(await ids({ tagAny: ["A/B"] })).toEqual([child.id]);
+    expect(await ids({ tagAny: [] })).toEqual([parent.id, child.id, unrelated.id].sort());
+    expect(await ids({ tag: "a" })).toEqual([parent.id]);
+  });
+
+  test("activity includes artifacts only when asked", async () => {
+    const value = await scope();
+    const note = await createLocalMemo(value, { notebookId: "nb-inbox", tags: ["a/b"] });
+    const artifact = await createLocalMemo(value, { notebookId: "nb-library", tags: ["a/b"] });
+
+    const plain = await listLocalMemoActivity(value, {});
+    expect(plain.memos.map((memo) => memo.id)).toEqual([note.id]);
+    const withArtifacts = await listLocalMemoActivity(value, { includeArtifacts: true });
+    expect(withArtifacts.memos.map((memo) => memo.id).sort()).toEqual([note.id, artifact.id].sort());
+  });
+});

@@ -152,12 +152,18 @@ export const registerMemoRoutes = (
       createdBounds[key] = time.toISOString();
     }
 
+    const tagAny = context.req.queries("tagAny") ?? [];
+    if (tagAny.length > 0 && context.req.query("tag")) {
+      return apiError(context, "invalid_params", "tag and tagAny cannot be combined.", 400);
+    }
+
     return context.json(await dependencies.listMemos(context.env.storage.db, {
       workspaceId: getWorkspaceId(context),
       notebookId: context.req.query("notebookId"),
       includeNotebookDescendants: context.req.query("includeDescendants") === "1",
       query: context.req.query("q"),
       tag: context.req.query("tag"),
+      ...(tagAny.length > 0 ? { tagAny } : {}),
       includeTrash: context.req.query("trash") === "1",
       sort: context.req.query("sort"),
       filter: context.req.query("filter"),
@@ -177,6 +183,7 @@ export const registerMemoRoutes = (
     return context.json(await dependencies.listMemoActivity(context.env.storage.db, {
       workspaceId: getWorkspaceId(context),
       notebookId: context.req.query("notebookId") || null,
+      ...(context.req.query("includeArtifacts") === "1" ? { includeArtifacts: true } : {}),
     }));
   });
 

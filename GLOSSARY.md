@@ -24,6 +24,14 @@ _Avoid_: Artifact notebook, agent directory
 A container inside the Artifact Library that groups artifacts; folders can nest without limit. "Folder" is used only inside the Artifact Library, never in the notebook tree.
 _Avoid_: Artifact notebook, category
 
+**Tag**:
+A piece of text attached to a memo to group memos across notebooks; a memo can carry several tags. A tag can be split into levels with `/` (e.g. `reading/fiction`), and emoji are part of its text; tags exist only on memos, with no tag entity apart from them.
+_Avoid_: Label, hashtag, category, topic
+
+**Tag Tree**:
+The hierarchical view built by splitting every tag in a workspace into levels at `/`. Each node stands for a tag together with all its descendant tags; spellings that differ only in letter case or whitespace form one node.
+_Avoid_: Tag folder, tag directory, tag category
+
 ## Content
 
 **Memo (Note)**:

@@ -154,6 +154,8 @@ export const MEMO_LIST_WIDTH_STORAGE_KEY = "edgeever.memoListWidth";
 export const NOTEBOOK_SORT_STORAGE_KEY = "edgeever.notebookSort";
 export const ARTIFACT_FOLDER_SORT_STORAGE_KEY = "edgeever.artifactFolderSort";
 export const NOTEBOOK_TREE_COLLAPSED_IDS_STORAGE_KEY = "edgeever.notebookTreeCollapsedIds:v1";
+export const TAG_TREE_EXPANDED_KEYS_STORAGE_KEY = "edgeever.tagTreeExpandedKeys:v1";
+export const TAG_TREE_SECTION_COLLAPSED_STORAGE_KEY = "edgeever.tagTreeSectionCollapsed:v1";
 export const SHORTCUT_SETTINGS_STORAGE_KEY = "edgeever.shortcutSettings";
 export const DEFAULT_MEMO_LIST_WIDTH_PX = 360;
 export const MIN_MEMO_LIST_WIDTH_PX = 300;
@@ -528,23 +530,50 @@ export const writeNotebookSortPreference = (sortMode: NotebookSortMode, storageK
   }
 };
 
-export const readNotebookTreeCollapsedIdsPreference = () => {
+const readStringSetPreference = (storageKey: string) => {
   try {
-    const value: unknown = JSON.parse(window.localStorage.getItem(NOTEBOOK_TREE_COLLAPSED_IDS_STORAGE_KEY) ?? "[]");
+    const value: unknown = JSON.parse(window.localStorage.getItem(storageKey) ?? "[]");
 
     if (!Array.isArray(value)) {
       return new Set<string>();
     }
 
-    return new Set(value.filter((notebookId): notebookId is string => typeof notebookId === "string" && notebookId.length > 0));
+    return new Set(value.filter((entry): entry is string => typeof entry === "string" && entry.length > 0));
   } catch {
     return new Set<string>();
   }
 };
 
-export const writeNotebookTreeCollapsedIdsPreference = (notebookIds: Iterable<string>) => {
+const writeStringSetPreference = (storageKey: string, entries: Iterable<string>) => {
   try {
-    window.localStorage.setItem(NOTEBOOK_TREE_COLLAPSED_IDS_STORAGE_KEY, JSON.stringify(Array.from(new Set(notebookIds))));
+    window.localStorage.setItem(storageKey, JSON.stringify(Array.from(new Set(entries))));
+  } catch {
+    // Local storage can be unavailable in private or restricted browser contexts.
+  }
+};
+
+export const readNotebookTreeCollapsedIdsPreference = () => readStringSetPreference(NOTEBOOK_TREE_COLLAPSED_IDS_STORAGE_KEY);
+
+export const writeNotebookTreeCollapsedIdsPreference = (notebookIds: Iterable<string>) =>
+  writeStringSetPreference(NOTEBOOK_TREE_COLLAPSED_IDS_STORAGE_KEY, notebookIds);
+
+/** Tag tree nodes start collapsed, so only the expanded keys are remembered. */
+export const readTagTreeExpandedKeysPreference = () => readStringSetPreference(TAG_TREE_EXPANDED_KEYS_STORAGE_KEY);
+
+export const writeTagTreeExpandedKeysPreference = (keys: Iterable<string>) =>
+  writeStringSetPreference(TAG_TREE_EXPANDED_KEYS_STORAGE_KEY, keys);
+
+export const readTagTreeSectionCollapsedPreference = () => {
+  try {
+    return window.localStorage.getItem(TAG_TREE_SECTION_COLLAPSED_STORAGE_KEY) === "1";
+  } catch {
+    return false;
+  }
+};
+
+export const writeTagTreeSectionCollapsedPreference = (collapsed: boolean) => {
+  try {
+    window.localStorage.setItem(TAG_TREE_SECTION_COLLAPSED_STORAGE_KEY, collapsed ? "1" : "0");
   } catch {
     // Local storage can be unavailable in private or restricted browser contexts.
   }
@@ -870,17 +899,20 @@ export const getNotebookDropSortOrder = (
   return Math.floor((previous.sortOrder + next.sortOrder) / 2);
 };
 
-export const focusNotebookTreeButton = (
+/** Arrow, Home and End navigation shared by the notebook tree and the tag tree. */
+export const focusTreeButton = (
   currentButton: HTMLButtonElement,
-  direction: "next" | "previous" | "first" | "last"
+  direction: "next" | "previous" | "first" | "last",
+  treeSelector: string,
+  buttonSelector: string
 ) => {
-  const tree = currentButton.closest<HTMLElement>("[data-notebook-tree]");
+  const tree = currentButton.closest<HTMLElement>(treeSelector);
 
   if (!tree) {
     return;
   }
 
-  const buttons = Array.from(tree.querySelectorAll<HTMLButtonElement>("[data-notebook-tree-button]")).filter(
+  const buttons = Array.from(tree.querySelectorAll<HTMLButtonElement>(buttonSelector)).filter(
     (button) => !button.disabled
   );
   const currentIndex = buttons.indexOf(currentButton);
@@ -906,6 +938,11 @@ export const focusNotebookTreeButton = (
   nextButton.focus({ preventScroll: true });
   nextButton.scrollIntoView({ block: "nearest" });
 };
+
+export const focusNotebookTreeButton = (
+  currentButton: HTMLButtonElement,
+  direction: "next" | "previous" | "first" | "last"
+) => focusTreeButton(currentButton, direction, "[data-notebook-tree]", "[data-notebook-tree-button]");
 
 export const notebookTreeContainsId = (nodes: NotebookNode[], targetNotebookId: string): boolean => {
   for (const node of nodes) {

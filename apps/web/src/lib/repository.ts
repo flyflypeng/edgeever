@@ -548,6 +548,7 @@ export const createWebRepository = (scope: string): EdgeEverRepository => {
       includeDescendants: Boolean(params.notebookIds?.some((notebookId) => notebookId !== params.notebookId)),
       q: params.q,
       tag: params.tag,
+      tagAny: params.tagAny,
       trash: params.trash,
       filter: params.filter,
       sort: params.sort,
@@ -565,7 +566,7 @@ export const createWebRepository = (scope: string): EdgeEverRepository => {
     if (await isLocalMirrorInitialized(scope) || await hasLocalMirrorData(scope)) {
       return listLocalMemoActivity(scope, params);
     }
-    return api.listMemoActivity({ notebookId: params.notebookId ?? null });
+    return api.listMemoActivity({ notebookId: params.notebookId ?? null, includeArtifacts: params.includeArtifacts });
   },
 
   async getMemo(memoId, includeDeleted = false) {

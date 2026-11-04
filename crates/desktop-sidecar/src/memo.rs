@@ -444,6 +444,22 @@ pub(crate) fn list_memos(database: &Connection, params: &Value) -> Result<Value,
         .unwrap_or("")
         .trim()
         .to_owned();
+    // The tag tree sends a whole subtree at once. One bound JSON array keeps the
+    // statement within SQLite's parameter limit, the way the cloud API does.
+    let tag_any = params
+        .get("tagAny")
+        .and_then(Value::as_array)
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let tag_any_json = serde_json::to_string(&tag_any).map_err(|e| e.to_string())?;
     let created_from = optional_trimmed_str(params, "createdFrom");
     let created_to = optional_trimmed_str(params, "createdTo");
     let pinned_first = bool_param(params, "pinnedFirst", true);
@@ -482,6 +498,7 @@ pub(crate) fn list_memos(database: &Connection, params: &Value) -> Result<Value,
         && notebook_ids_json == "[]"
         && q.is_empty()
         && tag.is_empty()
+        && tag_any.is_empty()
         && !trash
     {
         format!(" AND m.{OUTSIDE_ARTIFACT_LIBRARY}")
@@ -496,6 +513,12 @@ pub(crate) fn list_memos(database: &Connection, params: &Value) -> Result<Value,
                 SELECT 1 FROM json_each(m.tags_json) AS memo_tag
                 WHERE LOWER(TRIM(CAST(memo_tag.value AS TEXT))) = LOWER(?5)
             ))
+            AND (?8 = '[]' OR EXISTS (
+                SELECT 1 FROM json_each(m.tags_json) AS memo_tag
+                WHERE LOWER(TRIM(CAST(memo_tag.value AS TEXT))) IN (
+                    SELECT LOWER(value) FROM json_each(?8)
+                )
+            ))
             AND (?6 IS NULL OR m.created_at >= ?6)
             AND (?7 IS NULL OR m.created_at < ?7){filter}{visibility}"
     );
@@ -503,7 +526,7 @@ pub(crate) fn list_memos(database: &Connection, params: &Value) -> Result<Value,
                 c.revision, m.created_at, m.updated_at, m.deleted_at, c.content_markdown
            FROM memos m JOIN memo_contents c ON c.memo_id = m.id
           WHERE {where_clause}
-          ORDER BY {order} LIMIT ?8 OFFSET ?9");
+          ORDER BY {order} LIMIT ?9 OFFSET ?10");
     let mut statement = database.prepare(&query).map_err(|e| e.to_string())?;
     let rows = statement
         .query_map(
@@ -515,6 +538,7 @@ pub(crate) fn list_memos(database: &Connection, params: &Value) -> Result<Value,
                 tag,
                 created_from,
                 created_to,
+                tag_any_json,
                 limit,
                 offset
             ],
@@ -535,7 +559,8 @@ pub(crate) fn list_memos(database: &Connection, params: &Value) -> Result<Value,
                 notebook_ids_json,
                 tag,
                 created_from,
-                created_to
+                created_to,
+                tag_any_json
             ],
             |row| row.get(0),
         )
@@ -561,22 +586,26 @@ fn optional_trimmed_str<'a>(params: &'a Value, key: &str) -> Option<&'a str> {
 /// notebook itself is matched (no descendants) and trashed notes are skipped.
 pub(crate) fn list_memo_activity(database: &Connection, params: &Value) -> Result<Value, String> {
     let notebook_id = optional_trimmed_str(params, "notebookId");
+    let include_artifacts = bool_param(params, "includeArtifacts", false);
     let query = format!(
         "SELECT id, created_at, tags_json FROM memos
-          WHERE is_deleted = 0 AND (?1 IS NOT NULL OR {OUTSIDE_ARTIFACT_LIBRARY})
+          WHERE is_deleted = 0 AND (?1 IS NOT NULL OR ?3 = 1 OR {OUTSIDE_ARTIFACT_LIBRARY})
             AND (?1 IS NULL OR notebook_id = ?1)
           ORDER BY created_at DESC, id DESC LIMIT ?2"
     );
     let mut statement = database.prepare(&query).map_err(|e| e.to_string())?;
     let memos = statement
-        .query_map(rusqlite::params![notebook_id, MEMO_ACTIVITY_LIMIT], |row| {
-            let tags: String = row.get("tags_json")?;
-            Ok(json!({
-                "id": row.get::<_, String>("id")?,
-                "createdAt": row.get::<_, String>("created_at")?,
-                "tags": tags_from_json(&tags),
-            }))
-        })
+        .query_map(
+            rusqlite::params![notebook_id, MEMO_ACTIVITY_LIMIT, include_artifacts as i64],
+            |row| {
+                let tags: String = row.get("tags_json")?;
+                Ok(json!({
+                    "id": row.get::<_, String>("id")?,
+                    "createdAt": row.get::<_, String>("created_at")?,
+                    "tags": tags_from_json(&tags),
+                }))
+            },
+        )
         .map_err(|e| e.to_string())?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| e.to_string())?;
@@ -1056,6 +1085,67 @@ mod tests {
         assert_eq!(
             ids(&list_memo_activity(&database, &json!({ "notebookId": "nb_folder" })).unwrap()),
             vec!["art"]
+        );
+    }
+
+    #[test]
+    fn tag_any_matches_any_listed_tag_and_reaches_the_artifact_library() {
+        let database = jot_database();
+        database
+            .execute_batch(
+                "UPDATE memos SET tags_json = '[\"a/b\"]' WHERE id = 'a';
+                 UPDATE memos SET tags_json = '[\"A/B/C\"]' WHERE id = 'c';
+                 INSERT INTO notebooks (id, parent_id, system_kind) VALUES
+                   ('nb_library', NULL, 'artifact_library'), ('nb_folder', 'nb_library', NULL);
+                 INSERT INTO memos (id, notebook_id, title, excerpt, tags_json, is_pinned, is_deleted, created_at, updated_at, deleted_at) VALUES
+                   ('art', 'nb_folder', 'Page', 'page', '[\"a/b/c\"]', 0, 0, '2026-10-08T00:00:00.000Z', '2026-10-08T00:00:00.000Z', NULL);
+                 INSERT INTO memo_contents (memo_id, content_markdown, content_text, revision)
+                   VALUES ('art', 'page', 'page', 1);",
+            )
+            .unwrap();
+        let list = |params: Value| -> Vec<String> {
+            ids(&list_memos(&database, &params).unwrap())
+                .into_iter()
+                .map(str::to_owned)
+                .collect()
+        };
+
+        let mut subtree = list(json!({ "tagAny": ["a/b", "A/B/C", "a/b/c"] }));
+        subtree.sort();
+        assert_eq!(subtree, vec!["a", "art", "c"]);
+        assert_eq!(list(json!({ "tagAny": [] })), list(json!({})));
+        assert_eq!(list(json!({ "tagAny": ["a/b"], "notebookId": "nb_inbox" })), vec!["a"]);
+        // A subtree of more than 100 names still binds as a single JSON parameter.
+        let many: Vec<String> = (0..150).map(|index| format!("bulk/{index}")).collect();
+        assert_eq!(list_memos(&database, &json!({ "tagAny": many })).unwrap()["totalCount"], 0);
+    }
+
+    #[test]
+    fn memo_activity_includes_artifacts_only_on_request() {
+        let database = jot_database();
+        database
+            .execute_batch(
+                "INSERT INTO notebooks (id, parent_id, system_kind) VALUES
+                   ('nb_library', NULL, 'artifact_library'), ('nb_folder', 'nb_library', NULL);
+                 INSERT INTO memos (id, notebook_id, title, excerpt, tags_json, is_pinned, is_deleted, created_at, updated_at, deleted_at) VALUES
+                   ('art', 'nb_folder', 'Page', 'page', '[\"a/b\"]', 0, 0, '2026-10-08T00:00:00.000Z', '2026-10-08T00:00:00.000Z', NULL);
+                 INSERT INTO memo_contents (memo_id, content_markdown, content_text, revision)
+                   VALUES ('art', 'page', 'page', 1);",
+            )
+            .unwrap();
+
+        assert!(!ids(&list_memo_activity(&database, &json!({})).unwrap()).contains(&"art"));
+        let with_artifacts =
+            list_memo_activity(&database, &json!({ "includeArtifacts": true })).unwrap();
+        assert!(ids(&with_artifacts).contains(&"art"));
+        assert_eq!(
+            with_artifacts["memos"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|memo| memo["id"] == "art")
+                .unwrap()["tags"],
+            json!(["a/b"])
         );
     }
 }

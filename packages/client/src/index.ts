@@ -1225,6 +1225,8 @@ export const createEdgeEverClient = (options: EdgeEverClientOptions = {}) => {
       includeDescendants?: boolean;
       q?: string;
       tag?: string;
+      /** Matches memos carrying any of these tags; the tag tree sends a whole subtree. */
+      tagAny?: string[];
       trash?: boolean;
       sort?: MemoSortMode;
       filter?: MemoFilterMode;
@@ -1255,6 +1257,10 @@ export const createEdgeEverClient = (options: EdgeEverClientOptions = {}) => {
 
       if (params.tag?.trim()) {
         search.set("tag", params.tag.trim());
+      }
+
+      for (const tag of params.tagAny ?? []) {
+        if (tag.trim()) search.append("tagAny", tag.trim());
       }
 
       if (params.trash) {
@@ -1296,10 +1302,13 @@ export const createEdgeEverClient = (options: EdgeEverClientOptions = {}) => {
       return request<ListMemosResponse>(`/api/v1/memos?${search.toString()}`);
     },
 
-    listMemoActivity: (params: { notebookId?: string | null } = {}) => {
+    listMemoActivity: (params: { notebookId?: string | null; includeArtifacts?: boolean } = {}) => {
       const search = new URLSearchParams();
       if (params.notebookId) {
         search.set("notebookId", params.notebookId);
+      }
+      if (params.includeArtifacts) {
+        search.set("includeArtifacts", "1");
       }
       const query = search.toString();
       return request<MemoActivityResponse>(`/api/v1/memos/activity${query ? `?${query}` : ""}`);

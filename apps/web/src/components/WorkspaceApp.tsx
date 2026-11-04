@@ -1,4 +1,5 @@
 import { startPosterClientRenderer } from "@/lib/poster-client-render";
+import { TAG_TREE_QUERY_KEY } from "./TagTreeSection";
 import {
   lazy,
   Suspense,
@@ -45,7 +46,7 @@ import {
 } from "@/lib/mobile-editor";
 import { cn } from "@/lib/utils";
 import { isBrowserOffline, isBrowserOnline } from "@/lib/network-status";
-import { ARTIFACT_MAX_HTML_BYTES, createDefaultDiagramDocument, createDefaultInfographicDocument, hasArtifactDocumentMarker, hasPosterDocumentMarker, posterFallbackMarkdown, serializePosterDocument, createDefaultTableDocument, diagramFallbackMarkdown, getArtifactLibraryTreeIds, getNotebookScopeIds, hasTableDocumentMarker, infographicFallbackMarkdown, markdownToDoc, parseDiagramDocument, parseInfographicDocument, parseTableDocument, serializeDiagramDocument, serializeInfographicDocument, serializeTableDocument, tableFallbackMarkdown, type NoteCreateKind, type Notebook, type AuthUser, type MemoSummary, type MemoDetail, type MemoTemplate as SavedMemoTemplate, getMemoDisplayTitle } from "@edgeever/shared";
+import { ARTIFACT_MAX_HTML_BYTES, buildTagTree, findTagNode, resolveTagNodeKey, createDefaultDiagramDocument, createDefaultInfographicDocument, hasArtifactDocumentMarker, hasPosterDocumentMarker, posterFallbackMarkdown, serializePosterDocument, createDefaultTableDocument, diagramFallbackMarkdown, getArtifactLibraryTreeIds, getNotebookScopeIds, hasTableDocumentMarker, infographicFallbackMarkdown, markdownToDoc, parseDiagramDocument, parseInfographicDocument, parseTableDocument, serializeDiagramDocument, serializeInfographicDocument, serializeTableDocument, tableFallbackMarkdown, type NoteCreateKind, type Notebook, type AuthUser, type MemoSummary, type MemoDetail, type MemoTemplate as SavedMemoTemplate, getMemoDisplayTitle } from "@edgeever/shared";
 import { toggleMobileMemoSelection } from "@edgeever/shared/mobile-ui";
 import type {
   Pane,
@@ -159,7 +160,6 @@ const NotebookPane = lazy(() => import("./NotebookPane").then((module) => ({ def
 const EvernoteImportGuidePane = lazy(() =>
   import("./EvernoteImportGuidePane").then((module) => ({ default: module.EvernoteImportGuidePane }))
 );
-const TagsPane = lazy(() => import("./TagsPane").then((module) => ({ default: module.TagsPane })));
 const TemplatesPane = lazy(() => import("./TemplatesPane").then((module) => ({ default: module.TemplatesPane })));
 const AiPromptsPane = lazy(() => import("./AiPromptsPane").then((module) => ({ default: module.AiPromptsPane })));
 const JotView = lazy(() => import("./jot/JotView"));
@@ -238,7 +238,8 @@ export const WorkspaceApp = ({
     setSelectedNotebookId,
     setSelectionMoveTargetNotebookId,
   } = useWorkspaceSelection(desktopWorkspaceRestore);
-  const [selectedTag, setSelectedTag] = useState<string | null>(null);
+  const [selectedTag, setSelectedTag] = useState<{ key: string; tagNames: string[] } | null>(null);
+  const [tagTreeRevealRequest, setTagTreeRevealRequest] = useState(0);
   const autoSelectedDemoNotebookRef = useRef(false);
   const [createdMemoEditId, setCreatedMemoEditId] = useState<string | null>(null);
   const pendingCreatedMemoIdRef = useRef<string | null>(null);
@@ -296,6 +297,7 @@ export const WorkspaceApp = ({
         queryClient.invalidateQueries({ queryKey: ["memo"] }),
         queryClient.invalidateQueries({ queryKey: ["notebooks"] }),
         queryClient.invalidateQueries({ queryKey: ["tags"] }),
+        queryClient.invalidateQueries({ queryKey: ["tagTree"] }),
         queryClient.invalidateQueries({ queryKey: ["templates"] }),
         queryClient.invalidateQueries({ queryKey: ["resources"] }),
       ]);
@@ -483,6 +485,7 @@ export const WorkspaceApp = ({
         queryClient.invalidateQueries({ queryKey: ["templates"] }),
         queryClient.invalidateQueries({ queryKey: ["resources"] }),
         queryClient.invalidateQueries({ queryKey: ["tags"] }),
+        queryClient.invalidateQueries({ queryKey: ["tagTree"] }),
       ]);
       setAppNoticeDialog({
         title: t("demo.resetSuccess"),
@@ -518,7 +521,7 @@ export const WorkspaceApp = ({
     shortcutSettings,
   } = useWorkspacePreferences();
   const { noteProse, updateNoteProse } = useNoteProse();
-  const [rightView, setRightView] = useState<"editor" | "jot" | "jot-review" | "settings" | "plugins" | "assets" | "tags" | "templates" | "ai-prompts" | "execution-center" | "evernote-migration">(() =>
+  const [rightView, setRightView] = useState<"editor" | "jot" | "jot-review" | "settings" | "plugins" | "assets" | "templates" | "ai-prompts" | "execution-center" | "evernote-migration">(() =>
     isInitialSettingsRoute
       ? "settings"
       : isInitialPluginsRoute
@@ -602,6 +605,7 @@ export const WorkspaceApp = ({
       queryClient.invalidateQueries({ queryKey: ["memo"] }),
       queryClient.invalidateQueries({ queryKey: ["notebooks"] }),
       queryClient.invalidateQueries({ queryKey: ["tags"] }),
+        queryClient.invalidateQueries({ queryKey: ["tagTree"] }),
       queryClient.invalidateQueries({ queryKey: ["resources"], refetchType: "all" }),
     ]);
   }, [queryClient]);
@@ -675,6 +679,18 @@ export const WorkspaceApp = ({
     queryFn: () => repository.listNotebooks(),
     networkMode: "offlineFirst",
   });
+
+  // The Tag Tree and the note-card chips share one tree so a raw tag name
+  // resolves to the same node, descendants included.
+  const tagActivityQuery = useQuery({
+    queryKey: TAG_TREE_QUERY_KEY,
+    queryFn: () => repository.listMemoActivity({ includeArtifacts: true }),
+    networkMode: "offlineFirst",
+  });
+  const tagTree = useMemo(
+    () => buildTagTree(tagActivityQuery.data?.memos ?? [], i18n.resolvedLanguage ?? i18n.language),
+    [i18n.language, i18n.resolvedLanguage, tagActivityQuery.data],
+  );
 
   const templatesQuery = useQuery({
     queryKey: ["templates"],
@@ -1085,7 +1101,7 @@ export const WorkspaceApp = ({
         notebookId: memoView === "notebook" && !selectedTag ? selectedNotebookId : null,
         notebookIds: memoView === "notebook" && !selectedTag ? selectedNotebookScopeIds : undefined,
         q: search,
-        tag: memoView === "notebook" ? selectedTag ?? undefined : undefined,
+        tagAny: memoView === "notebook" ? selectedTag?.tagNames : undefined,
         trash: memoView === "trash",
         filter: memoFilterMode,
         sort: memoSortMode,
@@ -2582,7 +2598,7 @@ export const WorkspaceApp = ({
     setActivePane("memos");
   };
 
-  const handleSelectTag = (tag: string) => {
+  const handleSelectTag = (tag: { key: string; tagNames: string[] }) => {
     clearPendingMemoSelection();
     navigateWorkspaceHome();
     setMemoView("notebook");
@@ -2596,6 +2612,54 @@ export const WorkspaceApp = ({
     setSelectedMemoId(null);
     setActivePane("memos");
   };
+
+  /** Resolves a raw tag from a note card to its tree node, descendants included. */
+  /** Remembers where a renamed subtree went so an active filter can follow it. */
+  const tagRenameRemapRef = useRef(new Map<string, string>());
+  const handleTagRenamed = useCallback((oldKey: string, newKey: string) => {
+    tagRenameRemapRef.current.set(oldKey, newKey);
+  }, []);
+  /**
+   * Follows a rename from the closest mapped ancestor, so selecting `a/kernel`
+   * and renaming `a` still lands on the moved node.
+   */
+  const resolveTagRename = useCallback((key: string) => {
+    const remap = tagRenameRemapRef.current;
+    const levels = key.split("/");
+    for (let depth = levels.length; depth > 0; depth -= 1) {
+      const prefix = levels.slice(0, depth).join("/");
+      let mapped = remap.get(prefix);
+      if (!mapped) continue;
+      for (let hop = 0; hop < 8 && remap.has(mapped); hop += 1) mapped = remap.get(mapped)!;
+      return [mapped, ...levels.slice(depth)].join("/");
+    }
+    return key;
+  }, []);
+
+  // A selected node follows a rename and clears when its subtree is removed.
+  useEffect(() => {
+    if (!selectedTag) return;
+    const node = findTagNode(tagTree, selectedTag.key);
+    if (node) {
+      if (node.subtreeNames.join("\u0000") !== selectedTag.tagNames.join("\u0000")) {
+        setSelectedTag({ key: node.key, tagNames: node.subtreeNames });
+      }
+      return;
+    }
+    if (tagActivityQuery.isLoading) return;
+    const target = findTagNode(tagTree, resolveTagRename(selectedTag.key));
+    tagRenameRemapRef.current.delete(selectedTag.key);
+    setSelectedTag(target ? { key: target.key, tagNames: target.subtreeNames } : null);
+  }, [resolveTagRename, selectedTag, tagActivityQuery.isLoading, tagTree]);
+
+  const handleSelectTagFromName = useCallback((name: string) => {
+    const node = findTagNode(tagTree, resolveTagNodeKey(name));
+    if (node) {
+      handleSelectTag({ key: node.key, tagNames: node.subtreeNames });
+      return;
+    }
+    handleSelectTag({ key: resolveTagNodeKey(name), tagNames: [name] });
+  }, [handleSelectTag, tagTree]);
 
   const handleMobileSearch = useCallback(() => {
     setMobileBottomNavActive("search");
@@ -2718,12 +2782,15 @@ export const WorkspaceApp = ({
     setActivePane("editor");
   };
 
+  // Tag management moved into the sidebar Tag Tree, so every former TagsPane
+  // entry point now expands the sidebar and scrolls to that section.
   const handleOpenTags = () => {
     clearHiddenMobileSearch();
     skipNextHomeRouteSyncRef.current = route.pathname !== "/";
     navigateWorkspaceHome();
-    setRightView("tags");
-    setActivePane("editor");
+    setNotebookSidebarCollapsed(false);
+    setActivePane("notebooks");
+    setTagTreeRevealRequest((request) => request + 1);
   };
 
   const openJotView = (view: "jot" | "jot-review") => {
@@ -2993,11 +3060,6 @@ export const WorkspaceApp = ({
 
     if (rightView === "jot" || rightView === "jot-review") {
       handleCloseJot();
-      return true;
-    }
-
-    if (rightView === "tags") {
-      handleCloseAssets();
       return true;
     }
 
@@ -3398,8 +3460,6 @@ export const WorkspaceApp = ({
         ? t("plugins.marketplace.loading")
       : rightView === "assets"
         ? t("workspace.loading.assets")
-        : rightView === "tags"
-          ? t("workspace.loading.tags")
         : rightView === "templates"
           ? t("templates.title")
         : rightView === "ai-prompts"
@@ -3514,6 +3574,12 @@ export const WorkspaceApp = ({
                   onDiscardConflicts={() => void discardConflictsNow()}
                   onOpenAssets={handleOpenAssets}
                   onOpenTags={handleOpenTags}
+                  selectedTagKey={selectedTag?.key ?? null}
+                  onSelectTag={(key, tagNames) => handleSelectTag({ key, tagNames })}
+                  onTagRenamed={handleTagRenamed}
+                  tagTreeRevealRequest={tagTreeRevealRequest}
+                  tagTree={tagTree}
+                  tagTreeLoading={tagActivityQuery.isLoading}
                   onOpenTemplates={handleOpenTemplates}
                   pluginHost={pluginHost}
                   onOpenPluginManager={handleOpenPluginManager}
@@ -3568,7 +3634,7 @@ export const WorkspaceApp = ({
           >
             <MemoListPane
               notebook={selectedTag ? null : selectedNotebook}
-              selectedTag={selectedTag}
+              selectedTag={selectedTag?.key ?? null}
               notebooks={notebooks}
               view={memoView}
               memos={memos}
@@ -3630,6 +3696,7 @@ export const WorkspaceApp = ({
               }}
               onBackFromTrash={handleSelectAllMemos}
               onClearTag={handleSelectAllMemos}
+              onSelectTag={handleSelectTagFromName}
               onOpenMemo={(memoId) => {
                 // Artifacts found by search or a tag open in the Agent Artifacts view.
                 const openedMemo = memoView === "notebook" ? memos.find((memo) => memo.id === memoId) : undefined;
@@ -3783,8 +3850,6 @@ export const WorkspaceApp = ({
                     <PluginMarketplacePane host={pluginHost} onClose={handleClosePluginMarketplace} onOpenExecutionCenter={handleOpenExecutionCenter} />
                   ) : rightView === "assets" ? (
                     <AssetsPane onClose={handleCloseAssets} repository={repository} onOpenExecutionCenter={handleOpenExecutionCenter} />
-                  ) : rightView === "tags" ? (
-                    <TagsPane onClose={handleCloseAssets} onSelectTag={handleSelectTag} repository={repository} onOpenExecutionCenter={handleOpenExecutionCenter} />
                   ) : rightView === "templates" ? (
                     <TemplatesPane
                     canCreateMemo={canCreateMemo}
@@ -3839,6 +3904,7 @@ export const WorkspaceApp = ({
                             await Promise.all([
                               queryClient.invalidateQueries({ queryKey: ["memos"], refetchType: "inactive" }),
                               queryClient.invalidateQueries({ queryKey: ["tags"] }),
+        queryClient.invalidateQueries({ queryKey: ["tagTree"] }),
                               queryClient.invalidateQueries({ queryKey: ["memo-revisions", memo.id] }),
                             ]);
                           }}
@@ -4245,7 +4311,7 @@ export const WorkspaceApp = ({
       )}
       {mobileNotebookPickerOpen && (
         <MobileNotebookPicker
-          currentLabel={memoView === "trash" ? t("notebookPane.trash") : selectedTag ? `#${selectedTag}` : undefined}
+          currentLabel={memoView === "trash" ? t("notebookPane.trash") : selectedTag ? `#${selectedTag.key}` : undefined}
           notebooks={notebooks}
           selectedNotebookId={selectedNotebookId}
           onClose={() => setMobileNotebookPickerOpen(false)}

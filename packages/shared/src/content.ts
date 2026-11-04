@@ -17,6 +17,7 @@ import { NEW_IMAGE_WIDTH_PERCENT, parseImageWidth } from "./image-display";
 import { IMAGE_GALLERY_NODE_TYPE, groupConsecutiveImagesIntoGalleries, normalizeImageGalleries } from "./image-gallery";
 import { EMPTY_EXTERNAL_LINK_NODE_TYPE } from "./empty-external-link";
 import { FRONT_MATTER_LANGUAGE, createFrontMatterNode, getFrontMatterSource, splitMarkdownFrontMatter } from "./front-matter";
+import { normalizeTagPath } from "./tags";
 
 export { PluginEmbed, PLUGIN_EMBED_NODE_TYPE, pluginEmbedToMarkdown, normalizePluginEmbedAttributes } from "./plugin-embed";
 export type { PluginEmbedAttributes } from "./plugin-embed";
@@ -564,9 +565,8 @@ export const normalizeTags = (tags: unknown): string[] => {
   return Array.from(
     new Set(
       tags
-        .map((tag) => (typeof tag === "string" ? tag.trim() : ""))
+        .map((tag) => (typeof tag === "string" ? normalizeTagPath(tag) : ""))
         .filter(Boolean)
-        .map((tag) => tag.replace(/^#/, ""))
     )
   ).slice(0, 24);
 };

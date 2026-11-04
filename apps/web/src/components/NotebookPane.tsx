@@ -51,11 +51,12 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { NotebookTreeItem } from "./NotebookTreeItem";
+import { TagTreeSection } from "./TagTreeSection";
 import { api, getConfiguredDesktopApiBaseUrl } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { useShowDescendantNotesPreference } from "@/lib/descendant-notes-preference";
 import { BETA_BADGE_CLASSNAME } from "@/lib/workspace-ui";
-import { findArtifactLibrary, getArtifactLibraryTreeIds, type Notebook, type AuthUser, type NoteCreateKind } from "@edgeever/shared";
+import { findArtifactLibrary, getArtifactLibraryTreeIds, type Notebook, type AuthUser, type NoteCreateKind, type TagTreeNode } from "@edgeever/shared";
 import type { NotebookDropPosition, NotebookSortMode } from "@/lib/app-helpers";
 import type { SyncQueueSummary } from "@/lib/sync-queue";
 import {
@@ -508,6 +509,12 @@ export const NotebookPane = ({
   onOpenJotReview,
   jotReviewActive,
   onOpenTags,
+  selectedTagKey,
+  onSelectTag,
+  onTagRenamed,
+  tagTreeRevealRequest,
+  tagTree,
+  tagTreeLoading,
   onOpenAssets,
   onOpenTemplates,
   pluginHost,
@@ -551,6 +558,14 @@ export const NotebookPane = ({
   onOpenJotReview: () => void;
   jotReviewActive: boolean;
   onOpenTags: () => void;
+  /** Tag tree node key currently filtering the note list. */
+  selectedTagKey: string | null;
+  onSelectTag: (key: string, tagNames: string[]) => void;
+  onTagRenamed: (oldKey: string, newKey: string) => void;
+  /** Incremented by the tag entry points to expand and scroll to the tag tree. */
+  tagTreeRevealRequest?: number;
+  tagTree: readonly TagTreeNode[];
+  tagTreeLoading: boolean;
   onOpenAssets: () => void;
   onOpenTemplates: () => void;
   pluginHost: EdgeEverPluginHost;
@@ -1034,6 +1049,16 @@ export const NotebookPane = ({
             </div>
           ) : null}
         </section>
+
+        <TagTreeSection
+          repository={repository}
+          tree={tagTree}
+          isLoading={tagTreeLoading}
+          selectedTagKey={selectedTagKey}
+          onSelectTag={onSelectTag}
+          onTagRenamed={onTagRenamed}
+          revealRequest={tagTreeRevealRequest}
+        />
 
       </div>
       </div>

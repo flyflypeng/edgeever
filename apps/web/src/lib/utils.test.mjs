@@ -73,7 +73,11 @@ describe("tag text parsing", () => {
       "product design",
       "work",
       "ideas",
-      "work",
     ]);
+  });
+
+  test("tidies tag paths the same way the server stores them", () => {
+    expect(parseTagsText("a / b, a//b, /a/, #a,   ")).toEqual(["a/b", "a"]);
+    expect(parseTagsText("📚读书 / 小说")).toEqual(["📚读书/小说"]);
   });
 });

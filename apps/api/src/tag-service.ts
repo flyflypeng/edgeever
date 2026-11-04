@@ -1,4 +1,4 @@
-import { normalizeTags, type TagSummary } from "@edgeever/shared";
+import { matchTagText, normalizeTags, tagLookupKeys, type TagSummary } from "@edgeever/shared";
 import type { AuditActor } from "./api-context";
 import { AppError } from "./app-error";
 import { auditStatement } from "./audit";
@@ -81,7 +81,7 @@ export const updateTagAcrossMemos = async (
   actor: AuditActor,
   actorLabel: string
 ) => {
-  const normalizedOld = normalizeTags([oldTag])[0];
+  const normalizedOld = matchTagText(oldTag);
   const normalizedNext = nextTag === null ? null : normalizeTags([nextTag])[0];
 
   if (!normalizedOld || normalizedOld === normalizedNext) return 0;
@@ -123,7 +123,7 @@ export const previewTagRename = async (
   oldTag: string,
   nextTag: string | null
 ) => {
-  const normalizedOld = normalizeTags([oldTag])[0];
+  const normalizedOld = matchTagText(oldTag);
   const normalizedNext = nextTag === null ? null : normalizeTags([nextTag])[0];
 
   if (!normalizedOld || normalizedOld === normalizedNext) {
@@ -157,7 +157,9 @@ export const updateTagsForMemos = async (
   }
 ) => {
   const memoIds = Array.from(new Set(input.memoIds));
-  const tags = normalizeTags(input.tags);
+  // Removal matches stored text exactly so legacy spellings such as `a / b`
+  // stay removable; additions go through the write-side path normalization.
+  const tags = input.mode === "add" ? normalizeTags(input.tags) : tagLookupKeys(input.tags);
 
   if (memoIds.length === 0 || tags.length === 0) {
     throw new AppError("invalid_params", "memoIds and tags must include at least one item", 400);

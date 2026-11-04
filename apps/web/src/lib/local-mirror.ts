@@ -42,6 +42,8 @@ export type LocalMemoListParams = {
   notebookIds?: string[];
   q?: string;
   tag?: string;
+  /** Matches memos carrying any of these tags; the tag tree sends a whole subtree. */
+  tagAny?: string[];
   trash?: boolean;
   sort?: MemoSortMode;
   filter?: MemoFilterMode;
@@ -59,6 +61,8 @@ export type LocalMemoListParams = {
 
 export type LocalMemoActivityParams = {
   notebookId?: string | null;
+  /** Workspace-wide activity normally leaves the Artifact Library out. */
+  includeArtifacts?: boolean;
 };
 
 const MEMO_ACTIVITY_LIMIT = 20000;
@@ -274,9 +278,10 @@ export const listLocalMemos = async (scope: string, params: LocalMemoListParams)
   const notebookIds = params.notebookIds ?? (params.notebookId ? [params.notebookId] : null);
   const q = params.q?.trim().toLocaleLowerCase();
   const tag = params.tag?.trim().toLocaleLowerCase();
+  const tagAny = Array.from(new Set((params.tagAny ?? []).map((value) => value.trim().toLocaleLowerCase()).filter(Boolean)));
 
   const pinnedFirst = params.pinnedFirst !== false;
-  const hiddenNotebookIds = !notebookIds?.length && !q && !tag && !params.trash
+  const hiddenNotebookIds = !notebookIds?.length && !q && !tag && tagAny.length === 0 && !params.trash
     ? await localArtifactTreeIds(scope)
     : null;
 
@@ -287,6 +292,7 @@ export const listLocalMemos = async (scope: string, params: LocalMemoListParams)
     if (params.createdFrom && memo.createdAt < params.createdFrom) return false;
     if (params.createdTo && memo.createdAt >= params.createdTo) return false;
     if (tag && !memo.tags.some((memoTag) => memoTag.toLocaleLowerCase() === tag)) return false;
+    if (tagAny.length > 0 && !memo.tags.some((memoTag) => tagAny.includes(memoTag.toLocaleLowerCase()))) return false;
     if (params.filter === "tagged" && memo.tags.length === 0) return false;
     if (params.filter === "untagged" && memo.tags.length > 0) return false;
     if (params.filter === "pinned" && !memo.isPinned) return false;
@@ -318,7 +324,7 @@ export const listLocalMemos = async (scope: string, params: LocalMemoListParams)
 
 /** Lightweight created-at and tag data for the jot heatmap and tag list. */
 export const listLocalMemoActivity = async (scope: string, params: LocalMemoActivityParams): Promise<MemoActivityResponse> => {
-  const hiddenNotebookIds = params.notebookId ? null : await localArtifactTreeIds(scope);
+  const hiddenNotebookIds = params.notebookId || params.includeArtifacts ? null : await localArtifactTreeIds(scope);
   const memos = (await localDb.memos.where("scope").equals(scope).toArray())
     .filter((memo) => !memo.isDeleted
       && (params.notebookId ? memo.notebookId === params.notebookId : !hiddenNotebookIds?.has(memo.notebookId)))

@@ -15,6 +15,7 @@ import {
   isMemoEditBindingValid,
   listTableAttachmentResourceIds,
   normalizeTags,
+  tagLookupKeys,
   parseTableDocument,
   type MemoDetail,
   type MemoEditSession,
@@ -185,7 +186,8 @@ export const searchMemoSummaries = async (
 ): Promise<MemoSummary[]> => {
   const q = options.query?.trim();
   const notebookId = options.notebookId?.trim() || null;
-  const tags = normalizeTags(options.tags ?? []);
+  // Lookup keys stay exact so MCP search keeps matching stored tag text.
+  const tags = tagLookupKeys(options.tags ?? []).slice(0, 24);
   const limit = clampNumber(options.limit, 1, 100);
   const filters = ["m.workspace_id = ?", "m.is_deleted = 0"];
   const binds: unknown[] = [options.workspaceId];

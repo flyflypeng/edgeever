@@ -20,6 +20,7 @@ import {
   resolveMergedMemoTitle,
   deriveMemoTitleFromMarkdown,
   isUntitledMemoTitle,
+  normalizeTags,
 } from "./content.ts";
 
 describe("derived memo title", () => {
@@ -864,5 +865,17 @@ describe("getMemoDisplayTitle", () => {
   test("keeps real titles, including Chinese ones", () => {
     expect(getMemoDisplayTitle("  Plan  ", "Untitled note")).toBe("Plan");
     expect(getMemoDisplayTitle("会议记录", "Untitled note")).toBe("会议记录");
+  });
+});
+
+describe("normalizeTags", () => {
+  test("tidies tag paths on write and drops empty ones", () => {
+    expect(normalizeTags(["a / b", "a//b", "/a/", "#a", "   ", "///"])).toEqual(["a/b", "a"]);
+    expect(normalizeTags(["Topic/Kernel", "📚读书 / 小说"])).toEqual(["Topic/Kernel", "📚读书/小说"]);
+  });
+
+  test("deduplicates spellings that normalize to the same path and caps at 24", () => {
+    expect(normalizeTags(["a / b", "a/b", "A/B"])).toEqual(["a/b", "A/B"]);
+    expect(normalizeTags(Array.from({ length: 30 }, (_, index) => `t${index}`))).toHaveLength(24);
   });
 });

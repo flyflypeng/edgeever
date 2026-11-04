@@ -400,6 +400,7 @@ export const MemoListPane = ({
   onOpenTrash,
   onBackFromTrash,
   onClearTag,
+  onSelectTag,
   onOpenSettings,
   onSyncMemos,
   onCreateMemo,
@@ -481,6 +482,8 @@ export const MemoListPane = ({
   onOpenTrash: () => void;
   onBackFromTrash: () => void;
   onClearTag: () => void;
+  /** Selects a tag in the sidebar Tag Tree from a card chip. */
+  onSelectTag?: (tag: string) => void;
   onOpenSettings: () => void;
   onSyncMemos: () => void;
   onCreateMemo: () => void;
@@ -1533,6 +1536,7 @@ export const MemoListPane = ({
                       onOpenKeyboardContextMenu={(target) => handleOpenMemoKeyboardContextMenu(memo, target)}
                       onToggle={(event) => handleToggleMemo(memo.id, event)}
                       onArtifactThumbnailNeeded={onArtifactThumbnailNeeded}
+                      onSelectTag={onSelectTag}
                     />
                   </div>
                 );

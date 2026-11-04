@@ -81,6 +81,7 @@ export const MemoCard = ({
   onOpenKeyboardContextMenu,
   onToggle,
   onArtifactThumbnailNeeded,
+  onSelectTag,
 }: {
   memo: MemoSummary;
   selected: boolean;
@@ -103,6 +104,8 @@ export const MemoCard = ({
   onToggle: (event?: MouseEvent<HTMLElement>) => void;
   /** Called while an artifact card without an up-to-date thumbnail is on screen. */
   onArtifactThumbnailNeeded?: (memo: MemoSummary) => void;
+  /** Selects a tag in the sidebar Tag Tree instead of opening the note. */
+  onSelectTag?: (tag: string) => void;
 }) => {
   const { t, i18n } = useTranslation();
   // Artifact cards have one layout (style B); the list density does not apply to them.
@@ -285,7 +288,7 @@ export const MemoCard = ({
     setMemoDragPreview(event.dataTransfer, dragLabel);
   };
 
-  const handleClick = (event: MouseEvent<HTMLButtonElement>) => {
+  const handleClick = (event: MouseEvent<HTMLElement>) => {
     if (handledModifierPointerRef.current) {
       event.preventDefault();
       event.stopPropagation();
@@ -402,10 +405,11 @@ export const MemoCard = ({
             </span>
           </button></TooltipTrigger><TooltipContent>{selectionControlLabel}</TooltipContent></Tooltip>
         )}
+        <div className="flex min-w-0 flex-1 flex-col">
         <button
           className={cn(
-            "min-w-0 flex-1 px-4 py-3.5 text-left touch-pan-y focus-visible:bg-slate-50 focus-visible:shadow-[inset_3px_0_0_rgb(148,163,184)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-slate-400/60 [-webkit-touch-callout:none] lg:py-3.5 transition-all duration-200",
-            listDensity === "compact" && "py-2.5",
+            "min-w-0 px-4 pt-3.5 text-left touch-pan-y focus-visible:bg-slate-50 focus-visible:shadow-[inset_3px_0_0_rgb(148,163,184)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-slate-400/60 [-webkit-touch-callout:none] lg:pt-3.5 transition-all duration-200",
+            listDensity === "compact" && "pt-2.5",
             showSelectionControl && "pl-3 lg:pl-3",
             !isTrashView && !multiSelectKeyDown && "lg:cursor-grab lg:active:cursor-grabbing",
             multiSelectKeyDown && "cursor-copy"
@@ -488,22 +492,37 @@ export const MemoCard = ({
               {memoExcerpt}
             </div>
           )}
-          <div className={cn("mt-3.5 flex flex-wrap items-center gap-2", listDensity === "compact" && "mt-1.5")}>
-            <time className="text-xs font-normal text-slate-500 " dateTime={listTimestamp.value}>
-              {listTimestamp.field === "createdAt"
-                ? t("memoCard.createdAt", { time: listTimestampLabel })
-                : listTimestampLabel}
-            </time>
-            {memo.tags.slice(0, 3).map((tag) => (
-              <span
+        </button>
+        {/* Tags sit outside the card button so each one can focus and filter on its own. */}
+        <div
+          className={cn("flex flex-wrap items-center gap-2 px-4 pb-3.5 pt-3.5", listDensity === "compact" && "pb-2.5 pt-1.5", showSelectionControl && "pl-3 lg:pl-3")}
+          onClick={handleClick}
+        >
+          <time className="text-xs font-normal text-slate-500 " dateTime={listTimestamp.value}>
+            {listTimestamp.field === "createdAt"
+              ? t("memoCard.createdAt", { time: listTimestampLabel })
+              : listTimestampLabel}
+          </time>
+          {memo.tags.slice(0, 3).map((tag) => (
+            onSelectTag ? (
+              <button
                 key={tag}
-                className="text-xs tracking-tight text-slate-400"
+                type="button"
+                className="rounded text-xs tracking-tight text-slate-400 transition-colors hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400/70"
+                aria-label={t("tagTree.filterBy", { name: tag })}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onSelectTag(tag);
+                }}
               >
                 #{tag}
-              </span>
-            ))}
-          </div>
-        </button>
+              </button>
+            ) : (
+              <span key={tag} className="text-xs tracking-tight text-slate-400">#{tag}</span>
+            )
+          ))}
+        </div>
+        </div>
         {!selectionMode && (
           <div
             className={cn(
